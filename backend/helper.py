@@ -1,6 +1,15 @@
-import openai
+import os
+from openai import OpenAI
 import json
 import time
+from openai import OpenAI
+
+# Check for OpenAI API key
+if not os.environ.get("OPENAI_API_KEY"):
+    raise ValueError("OPENAI_API_KEY environment variable is not set")
+
+# Initialize the OpenAI client - new SDK style
+openai_client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
 from tenacity import (
     retry,
     stop_after_attempt, 

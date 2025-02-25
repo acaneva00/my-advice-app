@@ -111,6 +111,7 @@ def extract_variable_from_response(last_prompt: str, user_message: str, context:
         return {}
         
 def chat_fn(user_message, history, state):
+    print(f"\n\n==== NEW MESSAGE RECEIVED: {user_message} ====\n\n")
     print(f"DEBUG app.py: Entering chat_fn")
     print(f"DEBUG app.py: User message: {user_message}")
     print(f"DEBUG app.py: Current state: {state}")
@@ -251,4 +252,6 @@ with gr.Blocks() as demo:
         txt = gr.Textbox(show_label=False, placeholder="Enter your message and press enter")
     txt.submit(chat_fn, [txt, chatbot, state], [chatbot, state, txt], queue=True)
 
-demo.launch()
+demo.queue()
+print("\n\n==== APPLICATION STARTUP COMPLETE ====\n\n")
+demo.launch(server_name="0.0.0.0", server_port=7860)
