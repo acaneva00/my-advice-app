@@ -2,6 +2,7 @@ import os
 import re
 import openai
 import pandas as pd
+from openai import OpenAI
 from backend.charts import generate_fee_bar_chart
 from backend.utils import (
     parse_age_from_query,
