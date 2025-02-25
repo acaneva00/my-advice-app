@@ -2,7 +2,7 @@ import os
 from openai import OpenAI
 import json
 import time
-from openai import OpenAI
+import logging
 
 # Check for OpenAI API key
 if not os.environ.get("OPENAI_API_KEY"):
@@ -18,20 +18,12 @@ from tenacity import (
     before_log,
     after_log
 )
-import logging
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 @retry(
-    retry=retry_if_exception_type((
-        openai.error.APIConnectionError,
-        openai.error.APIError,
-        openai.error.RateLimitError,
-        openai.error.ServiceUnavailableError,
-        openai.error.Timeout
-    )),
     wait=wait_exponential(multiplier=1, min=4, max=30),
     stop=stop_after_attempt(5),
     before=before_log(logger, logging.INFO),
@@ -43,7 +35,7 @@ def ask_llm(system_prompt, user_prompt):
     print("DEBUG: system_prompt=", system_prompt)
     print("DEBUG: user_prompt=", user_prompt)
     try:
-        response = openai.ChatCompletion.create(
+        response = openai_client.chat.completions.create(
             model="gpt-4",
             messages=[
                 {"role": "system", "content": system_prompt},
@@ -53,12 +45,9 @@ def ask_llm(system_prompt, user_prompt):
             temperature=0.7
         )
         return response.choices[0].message.content.strip()
-    except openai.error.APIError as e:
+    except Exception as e:
         logger.error(f"OpenAI API Error: {e}")
         return "I apologize, but I'm having trouble processing your request right now. Let's try again."
-    except Exception as e:
-        logger.error(f"Unexpected error in ask_llm: {e}")
-        return "I apologize, but I'm having trouble understanding. Could you please rephrase your question?"
 
 def get_unified_variable_response(var_key: str, raw_value, context: dict, missing_vars: list) -> str:
     """
@@ -176,13 +165,13 @@ def extract_intent_variables(user_query: str, previous_system_response: str = ""
         print("DEBUG intent_extractor.py: Full prompt for variable extraction:")
         print(user_prompt)
         
-        response = openai.ChatCompletion.create(
+        response = openai_client.chat.completions.create(
             model="gpt-4",
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt}
             ],
-            max_tokens=250,  # Slightly increased max_tokens
+            max_tokens=250,
             temperature=0
         )
         print("DEBUG intent_extractor.py: Successfully received API response")
@@ -214,12 +203,6 @@ def extract_intent_variables(user_query: str, previous_system_response: str = ""
                 "current_income": 0,
                 "retirement_age": 0
             }
-    except openai.error.APIError as e:
-        print(f"DEBUG intent_extractor.py: OpenAI API Error: {e}")
-        raise
-    except openai.error.APIConnectionError as e:
-        print(f"DEBUG intent_extractor.py: Connection Error: {e}")
-        raise
     except Exception as e:
         print(f"DEBUG intent_extractor.py: Unexpected error: {e}")
         raise

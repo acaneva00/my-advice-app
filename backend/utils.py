@@ -28,7 +28,10 @@ def match_fund_name(input_fund: str, df) -> str:
 User input: {input_fund}
 Return the exact matching fund name from the list, or 'None' if no match found."""
 
-    response = openai.ChatCompletion.create(
+    # Get OpenAI API key from environment variable
+    client = OpenAI()
+        
+    response = client.chat.completions.create(
         model="gpt-4",
         messages=[
             {"role": "system", "content": system_prompt},

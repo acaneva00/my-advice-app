@@ -77,8 +77,8 @@ def parse_numeric_with_suffix(value_str: str) -> float:
         
     return number
 
-# Set OpenAI API key
-openai.api_key = os.environ.get("OPENAI_API_KEY")
+# Initialize OpenAI client
+openai_client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
 
 # Load your CSV into a global variable 'df'
 df = pd.read_csv(
