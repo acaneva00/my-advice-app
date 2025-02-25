@@ -1,0 +1,12 @@
+openai==0.27.0
+pandas==1.5.3
+plotly==5.14.1
+langchain==0.0.101
+tiktoken==0.3.3
+numpy==1.24.3
+pydantic==1.10.21
+fastapi==0.95.0
+uvicorn==0.22.0
+gradio==3.28.0
+tenacity==8.2.2
+kaleido==0.2.1
