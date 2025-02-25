@@ -1,4 +1,4 @@
-openai==0.27.0
+openai==1.64.0
 pandas==1.5.3
 plotly==5.14.1
 langchain==0.0.101
@@ -10,3 +10,4 @@ uvicorn==0.22.0
 gradio==3.28.0
 tenacity==8.2.2
 kaleido==0.2.1
+python-dotenv==1.0.0
