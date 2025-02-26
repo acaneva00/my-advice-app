@@ -3,6 +3,7 @@ import re
 import json
 import pandas as pd
 import openai
+from openai import OpenAI
 
 def match_fund_name(input_fund: str, df) -> str:
     """Use LLM to match user's fund input to the actual fund name in the database."""

@@ -1,16 +1,12 @@
-# Remove the pinned versions for these conflicting packages
 openai>=1.0.0,<2.0.0
 pandas==1.5.3
 plotly==5.14.1
-langchain>=0.0.101,<0.1.0
 tiktoken==0.3.3
 numpy==1.24.3
-# Change this to be compatible with Gradio 3.x
-pydantic>=1.10.0,<2.0.0
-fastapi>=0.95.0,<0.96.0
+pydantic>=2.0.0
+fastapi>=0.100.0
 uvicorn==0.22.0
-# Keep the older Gradio version that works with your code
-gradio==3.28.0
+gradio>=4.0.0
 tenacity==8.2.2
 kaleido==0.2.1
 python-dotenv==1.0.0

@@ -230,14 +230,27 @@ def chat_fn(user_message, history, state):
                 # All required variables collected, process the complete query
                 previous_system_response = next((msg["content"] for msg in reversed(internal_history) if msg["role"] == "assistant"), "")
                 full_history = " ".join(msg["content"] for msg in internal_history if msg["role"] == "user")
+                
+                print("DEBUG: Processing complete query after collecting all variables")
+                
                 answer = process_query(user_message, previous_system_response, full_history, state)
                 
+                print(f"DEBUG: Got answer: {answer}")
+
                 if answer:
-                    # Add the current conversation exchange to history in Gradio format
-                    history.append((user_message, answer))
+                    print("DEBUG: Adding final answer to history")
+                    # Create a new list with the same content as history to avoid reference issues
+                    new_history = [(msg1, msg2) for msg1, msg2 in history]
+                    # Append the new exchange (ensure it's in tuple format)
+                    new_history.append((user_message, answer))
+                    # Replace history with new_history
+                    history = new_history
+                    print(f"DEBUG: Final history length: {len(history)}")
                 else:
-                    # Add the current conversation exchange to history in Gradio format
-                    history.append((user_message, "I apologize, but I couldn't process that request. Could you please try again?"))
+                    print("DEBUG: No answer received, adding error message")
+                    new_history = [(msg1, msg2) for msg1, msg2 in history]
+                    new_history.append((user_message, "I apologize, but I couldn't process that request. Could you please try again?"))
+                    history = new_history
         else:
             # Handle invalid extraction
             error_message = "I'm sorry, I didn't understand that. Could you please repeat?"
@@ -262,10 +275,17 @@ def chat_fn(user_message, history, state):
     return history, state, ""
 
 with gr.Blocks() as demo:
-    chatbot = gr.Chatbot()  # Remove the type="messages" parameter
+    chatbot = gr.Chatbot(
+        render=True,  # Enable HTML rendering
+        height=600    # Adjust height as needed
+    )
     state = gr.State(None)
     with gr.Row():
-        txt = gr.Textbox(show_label=False, placeholder="Enter your message and press enter")
+        txt = gr.Textbox(
+            show_label=False, 
+            placeholder="Enter your message and press enter",
+            container=False
+        )
     txt.submit(chat_fn, [txt, chatbot, state], [chatbot, state, txt], queue=True)
 
 demo.queue()
