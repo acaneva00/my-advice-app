@@ -607,11 +607,11 @@ def process_query(user_query: str, previous_system_response: str = "", full_hist
         "current_balance": state["data"].get("current_balance", 0) or None,
         "current_income": state["data"].get("current_income", 0) or None,
         "retirement_age": state["data"].get("retirement_age", 0) or None,
-        "current_fund": current_fund,
-        "nominated_fund": nominated_fund,
+        "current_fund": state["data"].get("current_fund"),  # Fixed this line
+        "nominated_fund": state["data"].get("nominated_fund"),  # And this line
         "intent": intent,
         "is_new_intent": is_new_intent,
-        "previous_var": state["data"].get("last_var")  # Get the last variable we processed
+        "previous_var": state["data"].get("last_var")
     }
     
     print("DEBUG main.py: State data before context creation:", state["data"])
@@ -693,11 +693,11 @@ def process_query(user_query: str, previous_system_response: str = "", full_hist
             "current_balance": user_balance if user_balance > 0 else None,
             "current_income": current_income if current_income > 0 else None,
             "retirement_age": retirement_age if retirement_age > 0 else None,
-            "current_fund": current_fund,
-            "nominated_fund": nominated_fund,
+            "current_fund": state["data"].get("current_fund"),  # Fixed this line
+            "nominated_fund": state["data"].get("nominated_fund"),  # And this line
             "intent": intent,
             "is_new_intent": is_new_intent,
-            "previous_var": state.get("data", {}).get("last_var")  # Changed to get last_var from state data
+            "previous_var": state.get("data", {}).get("last_var")
         }
         
         print("DEBUG main.py: Context before unified response:")
@@ -864,8 +864,8 @@ def process_query(user_query: str, previous_system_response: str = "", full_hist
         system_prompt = (
             "You are a financial guru specializing in superannuation fees. "
             "Using only the fee data provided below, respond EXACTLY in the following format (replace placeholders with actual values):\n\n"
-            "‘Of the {num_funds} funds compared, {cheapest_fund} is the cheapest, with an annual fee of ${total_fee} "
-            "which is {fee_percentage}% of your current account balance.’\n\n"
+            "Of the {num_funds} funds compared, {cheapest_fund} is the cheapest, with an annual fee of ${total_fee} "
+            "which is {fee_percentage}% of your current account balance.\n\n"
             "Do not include any extra commentary or reference any funds other than the one provided in the data."
         )
         llm_answer = clean_response(ask_llm(system_prompt, user_prompt))
