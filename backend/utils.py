@@ -5,6 +5,26 @@ import pandas as pd
 import openai
 from openai import OpenAI
 
+def filter_dataframe_by_fund_name(df, fund_name, exact_match=False):
+    """
+    Safely filter a DataFrame by fund name, handling special characters properly.
+    
+    Args:
+        df: DataFrame to filter
+        fund_name: The fund name to search for
+        exact_match: If True, use exact matching; if False, use contains with escaped characters
+        
+    Returns:
+        Filtered DataFrame
+    """
+    import re
+    
+    if exact_match:
+        return df[df["FundName"] == fund_name]
+    else:
+        escaped_fund_name = re.escape(fund_name)
+        return df[df["FundName"].str.contains(escaped_fund_name, case=False, na=False)]
+
 def match_fund_name(input_fund: str, df) -> str:
     """Use LLM to match user's fund input to the actual fund name in the database."""
     print(f"DEBUG utils.py: Entering match_fund_name with input: {input_fund}")

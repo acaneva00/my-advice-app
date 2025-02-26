@@ -218,6 +218,7 @@ def chat_fn(user_message, history, state):
                     "current_income": state["data"].get("current_income", 0),
                     "retirement_age": state["data"].get("retirement_age", 0),
                     "current_fund": state["data"].get("current_fund"),
+                    "intent": state["data"].get("intent"),
                     "previous_var": state["data"].get("last_var")
                 })
                 unified_message = get_unified_variable_response(next_var, None, context, missing_vars)

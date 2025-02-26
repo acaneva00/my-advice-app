@@ -64,7 +64,7 @@ def get_unified_variable_response(var_key: str, raw_value, context: dict, missin
     # Define intent acknowledgments
     intent_messages = {
         "project_balance": "Happy to help you figure out how much super you'll have at retirement.",
-        "compare_fees_nominated": "I'll help you compare the fees between your super funds.",
+        "compare_fees_nominated": "I'll help you compare the fees between your super fund and a comparison fund.",
         "compare_fees_all": "I'll analyze how your fund's fees compare to others.",
         "find_cheapest": "I'll help you find the super fund with the lowest fees.",
         "retirement_income": "I'll help you understand your retirement income options.",
@@ -142,7 +142,7 @@ def extract_intent_variables(user_query: str, previous_system_response: str = ""
             "Required keys:\n"
             " - intent: one of \"compare_fees_nominated\", \"compare_fees_all\", \"find_cheapest\", \"project_balance\", \"retirement_income\", or \"unknown\"\n"
             " - current_fund: the name of the user's current super fund, if mentioned\n"
-            " - nominated_fund: the name of the fund the user wishes to compare against, if mentioned\n"
+            " - nominated_fund: the name of the fund the user wishes to compare against, if mentioned by the user or in the previous system response\n"
             " - current_age: the user's age as an integer\n"
             " - current_balance: the user's super balance (in dollars) as a number\n"
             " - current_income: the user's annual income (in dollars) as a number. Look for patterns like '$X income', 'income of $X', 'earning $X', etc.\n"
@@ -151,6 +151,10 @@ def extract_intent_variables(user_query: str, previous_system_response: str = ""
             "- Convert k/K to thousands (e.g., 150k = 150000)\n"
             "- Convert m/M to millions (e.g., 1.5m = 1500000)\n"
             "- Remove dollar signs and commas\n\n"
+            "Important instructions for resolving references:\n"
+            "- If the user query contains references like 'this fund', 'that fund', or similar, look for fund names in the previous system response\n"
+            "- If user mentions their fund (e.g., 'my fund', 'my super', 'my account', 'I am with') as one fund and references another fund from the previous response, properly assign current_fund and nominated_fund\n"
+            "- If the user is comparing a fund mentioned in the previous response with their fund, extract both fund names correctly, properly assign current_fund and nominated_fund\n\n"
             "Return a valid JSON object."
         )
         

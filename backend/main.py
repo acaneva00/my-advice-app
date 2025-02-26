@@ -14,7 +14,8 @@ from backend.utils import (
     determine_intent,
     find_cheapest_superfund,
     project_super_balance,
-    match_fund_name
+    match_fund_name,
+    filter_dataframe_by_fund_name
 )
 from backend.helper import extract_intent_variables, get_unified_variable_response, ask_llm
 
@@ -195,8 +196,8 @@ def process_compare_fees_nominated(context: dict) -> str:
         return f"Could not find one or both funds: {current_fund}, {nominated_fund}"
         
     # Find applicable funds
-    current_rows = find_applicable_funds(df[df["FundName"].str.contains(current_fund, case=False, na=False)], user_age)
-    nominated_rows = find_applicable_funds(df[df["FundName"].str.contains(nominated_fund, case=False, na=False)], user_age)
+    current_rows = find_applicable_funds(filter_dataframe_by_fund_name(df, current_fund_match), user_age)
+    nominated_rows = find_applicable_funds(filter_dataframe_by_fund_name(df, nominated_fund_match), user_age)
     
     if current_rows.empty:
         return f"Could not find applicable fee data for your current fund: {current_fund}."
@@ -218,8 +219,8 @@ def process_compare_fees_nominated(context: dict) -> str:
         "compare the fees between the user's current fund and the nominated fund. "
         "Explain which fee components (investment, admin, member) contribute most to any differences, "
         "and respond EXACTLY in the following format:\n\n"
-        "'Between your current fund and the nominated fund, [NOMINATED FUND] charges [X]% higher fees than [CURRENT FUND], "
-        "primarily due to differences in [FEE COMPONENTS].'\n\n"
+        "Comparing your [CURRENT FUND] fund and [NOMINATED FUND], your fund charges [X]% of your account balance while [NOMINATED FUND] charges [X]%, "
+        "primarily due to differences in [FEE COMPONENTS].\n\n"
         "Do not include any extra commentary."
     )
     return ask_llm(system_prompt, user_prompt)
@@ -248,7 +249,8 @@ def process_compare_fees_all(context: dict) -> str:
     current_rank = None
     if current_fund:
         for i, (fund_name, fee) in enumerate(fees, start=1):
-            if current_fund.lower() in fund_name.lower():
+            # Use case-insensitive substring matching for rank determination
+            if current_fund.lower() in fund_name.lower() or fund_name.lower() in current_fund.lower():
                 current_rank = i
                 break
     if not current_rank:
@@ -319,8 +321,8 @@ def process_find_cheapest(context: dict) -> str:
     system_prompt = (
         "You are a financial guru specializing in superannuation fees. "
         "Using only the fee data provided below, respond EXACTLY in the following format (replace placeholders with actual values):\n\n"
-        "'Of the {num_funds} funds compared, {cheapest_fund} is the cheapest, with an annual fee of ${total_fee} "
-        "which is {fee_percentage}% of your current account balance.'\n\n"
+        "Of the {num_funds} funds compared, {cheapest_fund} is the cheapest, with an annual fee of ${total_fee} "
+        "which is {fee_percentage}% of your current account balance.\n\n"
         "Do not include any extra commentary or reference any funds other than the one provided in the data."
     )
     return ask_llm(system_prompt, user_prompt)
@@ -339,10 +341,11 @@ def process_project_balance(context: dict) -> str:
         return f"Could not find applicable fee data for your current fund: {current_fund}."
     print(f"DEBUG main.py: Matched fund name: {matched_fund}")
     
+    # Now get the row for the matched fund using the safe filter function
     current_fund_rows = find_applicable_funds(
-        df[df["FundName"] == matched_fund],
+        filter_dataframe_by_fund_name(df, matched_fund, exact_match=True),
         user_age
-    )
+    )   
     if current_fund_rows.empty:
         return f"Could not find applicable fee data for your current fund: {current_fund}."
     current_fund_row = current_fund_rows.iloc[0]
@@ -430,6 +433,12 @@ def process_intent(intent: str, context: dict) -> str:
     try:
         response = ""
         
+        # Check if we should use the intent from context instead
+        context_intent = context.get("intent")
+        if intent == "unknown" and context_intent and context_intent != "unknown":
+            print(f"DEBUG process_intent: Overriding 'unknown' intent with context intent: {context_intent}")
+            intent = context_intent
+
         if intent == "compare_fees_nominated":
             response = process_compare_fees_nominated(context)
         elif intent == "compare_fees_all":
@@ -483,9 +492,11 @@ def process_query(user_query: str, previous_system_response: str = "", full_hist
                     retirement_age_value = int(re.search(r'\d+', user_query).group())
                     extracted.update({"intent": "unknown", "retirement_age": retirement_age_value})
         else:
-            # If we're collecting variables, only extract for the specific variable
-            extracted = {}
-    
+            # If we're collecting variables, don't extract intent or other variables
+            # Instead, preserve the existing intent from the state
+            extracted = {"intent": state["data"].get("intent", "unknown")}
+            print(f"DEBUG main.py: Preserving existing intent while collecting variables: {extracted['intent']}")
+
     print(f"DEBUG main.py: LLM extracted variables: {extracted}")
 
     
@@ -513,6 +524,9 @@ def process_query(user_query: str, previous_system_response: str = "", full_hist
     print("DEBUG process_query: Is new intent:")
     print(is_new_intent)
 
+    # IMPORTANT: Save the intent in state.data immediately
+    # This ensures the intent persists throughout variable collection
+    state["data"]["intent"] = intent
     
     # Get acknowledgment if this is a new intent
     acknowledgment = ""
@@ -572,21 +586,29 @@ def process_query(user_query: str, previous_system_response: str = "", full_hist
                 print(f"DEBUG main.py: Extracted value {response_value} for {var_key}")
                 state["data"][var_key] = response_value
         else:
-            # We're not collecting variables, only process initial extraction
-            # but NEVER update existing values that were collected through the variable collection process
+            # We're not collecting variables, so process initial extraction
+
+            # Always handle fund names separately (they are strings) regardless of other state variables
+            if extracted.get("current_fund"):
+                temp_fund = extracted["current_fund"]
+                matched_fund = match_fund_name(temp_fund, df)
+                print(f"DEBUG main.py: Processing extracted current_fund: {temp_fund}, matched to: {matched_fund}")
+                if matched_fund:
+                    state["data"]["current_fund"] = matched_fund
+                else:
+                    state["data"]["current_fund"] = temp_fund
+                    
+            if extracted.get("nominated_fund"):
+                temp_fund = extracted["nominated_fund"]
+                matched_fund = match_fund_name(temp_fund, df)
+                print(f"DEBUG main.py: Processing extracted nominated_fund: {temp_fund}, matched to: {matched_fund}")
+                if matched_fund:
+                    state["data"]["nominated_fund"] = matched_fund
+                else:
+                    state["data"]["nominated_fund"] = temp_fund
+            
+            # For numeric values, only update if we don't already have values from the variable collection process
             if not any(state["data"].get(key) for key in ["current_age", "current_balance", "current_income", "retirement_age"]):
-                # Handle fund names separately (they are strings)
-                if extracted.get("current_fund"):
-                    temp_fund = extracted["current_fund"]
-                    matched_fund = match_fund_name(temp_fund, df)
-                    if matched_fund:
-                        state["data"]["current_fund"] = matched_fund
-                    else:
-                        state["data"]["current_fund"] = temp_fund
-                if extracted.get("nominated_fund"):
-                    state["data"]["nominated_fund"] = extracted["nominated_fund"]
-                
-                # For numeric values, only update if they were explicitly extracted from this response
                 for key in ["current_age", "current_balance", "current_income", "retirement_age"]:
                     if key in extracted and extracted[key] is not None:
                         if extracted[key] != state["data"].get(key):  # Only update if value is different
@@ -594,12 +616,6 @@ def process_query(user_query: str, previous_system_response: str = "", full_hist
                             state["data"][key] = extracted[key]
             
         print("DEBUG main.py: Updated state after extraction:", state)
-        
-    # Instead of performing a final update that overwrites all the values,
-    # simply update the intent in the state:
-    state["data"]["intent"] = intent
-    print("DEBUG main.py: Final state:", state)
-
     
     # Build context dict for variable requests
     context = {
@@ -622,19 +638,25 @@ def process_query(user_query: str, previous_system_response: str = "", full_hist
     missing_vars = []
     print("DEBUG main.py: Determining missing variables")
     print("DEBUG main.py: Current state:", state)
-
+    
     # Only add to missing_vars if we don't already have a valid value
     if intent == "project_balance":
+        print("DEBUG main.py: Checking missing variables for project_balance intent")
         if not state["data"].get("current_age"):
             missing_vars.append("age")
+            print("DEBUG main.py: Missing variable: age")
         if not state["data"].get("current_fund"):
             missing_vars.append("current fund")
+            print("DEBUG main.py: Missing variable: current fund")
         if not state["data"].get("current_balance"):
             missing_vars.append("super balance")
+            print("DEBUG main.py: Missing variable: super balance")
         if not state["data"].get("current_income"):
             missing_vars.append("current income")
+            print("DEBUG main.py: Missing variable: current income")
         if not state["data"].get("retirement_age") or state["data"].get("retirement_age") <= state["data"].get("current_age", 0):
             missing_vars.append("desired retirement age")
+            print("DEBUG main.py: Missing variable: desired retirement age")
     
     # For find_cheapest
     if intent == "find_cheapest":
@@ -757,8 +779,8 @@ def process_query(user_query: str, previous_system_response: str = "", full_hist
             "compare the fees between the user's current fund and the nominated fund. "
             "Explain which fee components (investment, admin, member) contribute most to any differences, "
             "and respond EXACTLY in the following format:\n\n"
-            "‘Between your current fund and the nominated fund, [NOMINATED FUND] charges [X]% higher fees than [CURRENT FUND], "
-            "primarily due to differences in [FEE COMPONENTS].’\n\n"
+            "Between your current fund and the nominated fund, [NOMINATED FUND] charges [X]% higher fees than [CURRENT FUND], "
+            "primarily due to differences in [FEE COMPONENTS].\n\n"
             "Do not include any extra commentary."
         )
         llm_answer = clean_response(ask_llm(system_prompt, user_prompt))
