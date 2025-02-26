@@ -122,8 +122,19 @@ def chat_fn(user_message, history, state):
     if history is None:
         history = []
 
-    # Add user message to history
-    history.append({"role": "user", "content": user_message})
+    # For Gradio 3.x, history must be a list of tuples (user_message, bot_response)
+    # We'll convert our internal dictionary-based messages to this format when returning
+    
+    # Build internal history for processing in the expected dictionary format
+    internal_history = []
+    for user_msg, assistant_msg in history:
+        if user_msg:
+            internal_history.append({"role": "user", "content": user_msg})
+        if assistant_msg:
+            internal_history.append({"role": "assistant", "content": assistant_msg})
+    
+    # Add the current user message to our internal history
+    internal_history.append({"role": "user", "content": user_message})
     
     # If we are waiting for a specific missing variable
     if state.get("missing_var"):
@@ -212,41 +223,46 @@ def chat_fn(user_message, history, state):
                 unified_message = get_unified_variable_response(next_var, None, context, missing_vars)
                 state["data"]["last_clarification_prompt"] = unified_message
                 state["missing_var"] = next_var
-                history.append({"role": "assistant", "content": unified_message})
+                
+                # Add the current conversation exchange to history in Gradio format
+                history.append((user_message, unified_message))
             else:
                 # All required variables collected, process the complete query
-                previous_system_response = next((msg["content"] for msg in reversed(history) if msg["role"] == "assistant"), "")
-                full_history = " ".join(msg["content"] for msg in history if msg["role"] == "user")
+                previous_system_response = next((msg["content"] for msg in reversed(internal_history) if msg["role"] == "assistant"), "")
+                full_history = " ".join(msg["content"] for msg in internal_history if msg["role"] == "user")
                 answer = process_query(user_message, previous_system_response, full_history, state)
                 
                 if answer:
-                    history.append({"role": "assistant", "content": answer})
+                    # Add the current conversation exchange to history in Gradio format
+                    history.append((user_message, answer))
                 else:
-                    history.append({"role": "assistant", "content": "I apologize, but I couldn't process that request. Could you please try again?"})
+                    # Add the current conversation exchange to history in Gradio format
+                    history.append((user_message, "I apologize, but I couldn't process that request. Could you please try again?"))
         else:
             # Handle invalid extraction
             error_message = "I'm sorry, I didn't understand that. Could you please repeat?"
-            history.append({"role": "assistant", "content": error_message})
+            # Add the current conversation exchange to history in Gradio format
+            history.append((user_message, error_message))
             state["missing_var"] = var_marker
         
         return history, state, ""
 
     # Process new query
-    previous_system_response = next((msg["content"] for msg in reversed(history) if msg["role"] == "assistant"), "")
-    full_history = " ".join(msg["content"] for msg in history if msg["role"] == "user")
+    previous_system_response = next((msg["content"] for msg in reversed(internal_history) if msg["role"] == "assistant"), "")
+    full_history = " ".join(msg["content"] for msg in internal_history if msg["role"] == "user")
     
     answer = process_query(user_message, previous_system_response, full_history, state)
     
-    # Always ensure we have a valid response
+    # Always ensure we have a valid response and add to history in Gradio format
     if answer:
-        history.append({"role": "assistant", "content": answer})
+        history.append((user_message, answer))
     else:
-        history.append({"role": "assistant", "content": "I apologize, but I couldn't process that request. Could you please try again?"})
+        history.append((user_message, "I apologize, but I couldn't process that request. Could you please try again?"))
     
     return history, state, ""
 
 with gr.Blocks() as demo:
-    chatbot = gr.Chatbot(type="messages")
+    chatbot = gr.Chatbot()  # Remove the type="messages" parameter
     state = gr.State(None)
     with gr.Row():
         txt = gr.Textbox(show_label=False, placeholder="Enter your message and press enter")

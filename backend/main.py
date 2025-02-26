@@ -2,6 +2,7 @@ import os
 import re
 import openai
 import pandas as pd
+from typing import Union, Tuple
 from openai import OpenAI
 from backend.charts import generate_fee_bar_chart
 from backend.utils import (
@@ -92,7 +93,7 @@ df = pd.read_csv(
     engine="python"
 )
 
-def validate_response(var_name: str, user_message: str, context: dict) -> tuple[bool, float | str | None]:
+def validate_response(var_name: str, user_message: str, context: dict) -> Tuple[bool, Union[float, str, None]]:
     """Validate user response for a specific variable and return (is_valid, parsed_value)"""
     try:
         if var_name in ["current income", "age", "super balance", "desired retirement age"]:
