@@ -2,6 +2,7 @@ import os
 import re
 import openai
 import pandas as pd
+from backend.constants import economic_assumptions
 from typing import Union, Tuple
 from openai import OpenAI
 from backend.charts import generate_fee_bar_chart
@@ -293,8 +294,26 @@ def process_compare_fees_all(context: dict) -> str:
         "and the cheapest fund (for example, whether the difference is primarily due to a higher admin fee, investment fee, or member fee)."
     )
     
-    return ask_llm(system_prompt, user_prompt)
-
+    # Get the text response from the LLM
+    llm_answer = ask_llm(system_prompt, user_prompt)
+    print(f"DEBUG main.py: Generated LLM answer, length: {len(llm_answer)}")
+    
+    try:
+        # Import the chart generation function from backend.charts
+        from backend.charts import generate_fee_bar_chart
+        
+        # Generate the chart HTML
+        chart_html = generate_fee_bar_chart(fees)
+        print(f"DEBUG main.py: Generated chart, HTML length: {len(chart_html)}")
+        
+        # Return combined response with text above and chart below
+        final_response = f"{llm_answer}\n\n{chart_html}"
+        return final_response
+    except Exception as e:
+        print(f"DEBUG main.py: Error generating chart: {e}")
+        # Return just the text response if chart generation fails
+        return llm_answer
+    
 def process_find_cheapest(context: dict) -> str:
     """Process find_cheapest intent with the given context."""
     user_age = context["current_age"]
@@ -350,10 +369,11 @@ def process_project_balance(context: dict) -> str:
         return f"Could not find applicable fee data for your current fund: {current_fund}."
     current_fund_row = current_fund_rows.iloc[0]
     
-    wage_growth = 3.0
-    employer_contribution_rate = 12.0
-    investment_return = 8.0
-    inflation_rate = 2.5
+    # Use centralized assumptions
+    wage_growth = economic_assumptions["WAGE_GROWTH"]
+    employer_contribution_rate = economic_assumptions["EMPLOYER_CONTRIBUTION_RATE"]
+    investment_return = economic_assumptions["INVESTMENT_RETURN"]
+    inflation_rate = economic_assumptions["INFLATION_RATE"]
     
     projected_balance = project_super_balance(
         int(user_age), 
@@ -385,6 +405,119 @@ def process_project_balance(context: dict) -> str:
         "Then, in one concise sentence, explain the primary factors driving this projection, "
         "specifically highlighting the impact of your current fund's fees (which are recalculated monthly), investment performance, wage growth, and inflation."
     )
+    return ask_llm(system_prompt, user_prompt)
+
+def process_compare_balance_projection(context: dict) -> str:
+    """Process compare_balance_projection intent with the given context."""
+    user_age = context["current_age"]
+    current_fund = context["current_fund"]
+    nominated_fund = context["nominated_fund"]
+    retirement_age = context["retirement_age"]
+    user_balance = context["current_balance"]
+    current_income = context["current_income"]
+    
+    print(f"DEBUG main.py: Searching for funds: {current_fund} and {nominated_fund}")
+    
+    # Match the current fund
+    matched_current_fund = match_fund_name(current_fund, df)
+    if matched_current_fund is None:
+        return f"Could not find applicable fee data for your current fund: {current_fund}."
+    
+    # Match the nominated fund
+    matched_nominated_fund = match_fund_name(nominated_fund, df)
+    if matched_nominated_fund is None:
+        return f"Could not find applicable fee data for your nominated fund: {nominated_fund}."
+    
+    print(f"DEBUG main.py: Matched fund names: {matched_current_fund} and {matched_nominated_fund}")
+    
+    # Get rows for both funds
+    current_fund_rows = find_applicable_funds(
+        filter_dataframe_by_fund_name(df, matched_current_fund, exact_match=True),
+        user_age
+    )
+    nominated_fund_rows = find_applicable_funds(
+        filter_dataframe_by_fund_name(df, matched_nominated_fund, exact_match=True),
+        user_age
+    )
+    
+    if current_fund_rows.empty:
+        return f"Could not find applicable fee data for your current fund: {current_fund}."
+    if nominated_fund_rows.empty:
+        return f"Could not find applicable fee data for your nominated fund: {nominated_fund}."
+    
+    current_fund_row = current_fund_rows.iloc[0]
+    nominated_fund_row = nominated_fund_rows.iloc[0]
+    
+    # Use centralized assumptions
+    wage_growth = economic_assumptions["WAGE_GROWTH"]
+    employer_contribution_rate = economic_assumptions["EMPLOYER_CONTRIBUTION_RATE"]
+    investment_return = economic_assumptions["INVESTMENT_RETURN"]
+    inflation_rate = economic_assumptions["INFLATION_RATE"]
+    
+    # Project balances for both funds
+    current_projected_balance = project_super_balance(
+        int(user_age), 
+        int(retirement_age), 
+        float(user_balance), 
+        float(current_income),
+        wage_growth, 
+        employer_contribution_rate, 
+        investment_return, 
+        inflation_rate,
+        current_fund_row
+    )
+    
+    nominated_projected_balance = project_super_balance(
+        int(user_age), 
+        int(retirement_age), 
+        float(user_balance), 
+        float(current_income),
+        wage_growth, 
+        employer_contribution_rate, 
+        investment_return, 
+        inflation_rate,
+        nominated_fund_row
+    )
+    
+    # Calculate difference and percentage difference
+    absolute_difference = nominated_projected_balance - current_projected_balance
+    percentage_difference = (absolute_difference / current_projected_balance) * 100 if current_projected_balance > 0 else 0
+    
+    # Get fee breakdowns for context
+    current_breakdown = compute_fee_breakdown(current_fund_row, user_balance)
+    nominated_breakdown = compute_fee_breakdown(nominated_fund_row, user_balance)
+    
+    user_prompt = (
+        f"Data:\n"
+        f"Current age: {user_age}\n"
+        f"Current balance: ${user_balance:,.0f}\n"
+        f"Current income: ${current_income:,.0f}\n"
+        f"Desired retirement age: {retirement_age}\n"
+        f"Current fund: {matched_current_fund}\n"
+        f"Nominated fund: {matched_nominated_fund}\n"
+        f"Assumptions: Wage growth = {wage_growth}%, Employer contribution rate = {employer_contribution_rate}%, "
+        f"Gross investment return = {investment_return}%, Inflation rate = {inflation_rate}%.\n"
+        f"Current fund annual fees: ${current_breakdown['total_fee']:,.2f} "
+        f"({(current_breakdown['total_fee']/user_balance)*100:.2f}% of your balance)\n"
+        f"Nominated fund annual fees: ${nominated_breakdown['total_fee']:,.2f} "
+        f"({(nominated_breakdown['total_fee']/user_balance)*100:.2f}% of your balance)\n"
+        f"Projected balance at retirement with {matched_current_fund}: ${current_projected_balance:,.0f}\n"
+        f"Projected balance at retirement with {matched_nominated_fund}: ${nominated_projected_balance:,.0f}\n"
+        f"Absolute difference: ${absolute_difference:,.0f}\n"
+        f"Percentage difference: {percentage_difference:.2f}%"
+    )
+    
+    system_prompt = (
+        "You are a financial guru specializing in superannuation projections. "
+        "Based solely on the data provided, produce a response comparing the projected balances "
+        "between the two funds. Use this format:\n\n"
+        "At retirement, your projected balance with [current_fund] would be approximately $[current_balance], "
+        "while with [nominated_fund] it would be approximately $[nominated_balance].\n\n"
+        "This represents a difference of $[difference] ([percentage]% [higher/lower]) over your working life.\n\n"
+        "Then, add a concise explanation about how the difference in fees between the two funds compounds over time "
+        "to create this gap in projected balances."
+    )
+    
     return ask_llm(system_prompt, user_prompt)
 
 def process_default_comparison(context: dict) -> str:
@@ -447,6 +580,8 @@ def process_intent(intent: str, context: dict) -> str:
             response = process_find_cheapest(context)
         elif intent == "project_balance":
             response = process_project_balance(context)
+        elif intent == "compare_balance_projection":
+            response = process_compare_balance_projection(context)
         else:
             response = process_default_comparison(context)
         
@@ -685,6 +820,21 @@ def process_query(user_query: str, previous_system_response: str = "", full_hist
         if not state["data"].get("current_balance"):
             missing_vars.append("super balance")
 
+        # For compare_balance_projection
+    if intent == "compare_balance_projection":
+        if not state["data"].get("current_age"):
+            missing_vars.append("age")
+        if not state["data"].get("current_fund"):
+            missing_vars.append("current fund")
+        if not state["data"].get("nominated_fund"):
+            missing_vars.append("nominated fund")
+        if not state["data"].get("current_balance"):
+            missing_vars.append("super balance")
+        if not state["data"].get("current_income"):
+            missing_vars.append("current income")
+        if not state["data"].get("retirement_age") or state["data"].get("retirement_age") <= state["data"].get("current_age", 0):
+            missing_vars.append("desired retirement age")
+    
     # If any variables are missing, generate a structured prompt using the LLM
     if missing_vars:
         first_missing = missing_vars[0]

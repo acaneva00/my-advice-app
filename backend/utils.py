@@ -256,6 +256,9 @@ def project_super_balance(current_age: int, retirement_age: int, current_balance
         investment_return: Expected annual investment return (percentage)
         inflation_rate: Expected annual inflation rate (percentage)
         current_fund_row: DataFrame row containing fund fee structure
+        
+    Note:
+        Default economic assumptions are defined in backend/constants.py and can be imported from there.
     """
     total_months = (retirement_age - current_age) * 12
     balance = current_balance

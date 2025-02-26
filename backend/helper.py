@@ -67,6 +67,7 @@ def get_unified_variable_response(var_key: str, raw_value, context: dict, missin
         "compare_fees_nominated": "I'll help you compare the fees between your super fund and a comparison fund.",
         "compare_fees_all": "I'll analyze how your fund's fees compare to others.",
         "find_cheapest": "I'll help you find the super fund with the lowest fees.",
+        "compare_balance_projection": "I'll compare the projected retirement balances between two funds.",
         "retirement_income": "I'll help you understand your retirement income options.",
         "unknown": "I'll help you with your super query."
     }
@@ -140,7 +141,7 @@ def extract_intent_variables(user_query: str, previous_system_response: str = ""
             "You are an expert intent extractor for superannuation fee queries. "
             "Given the user's query and the most recent system response (if any), extract the following variables and output them as a valid JSON object with no extra commentary:\n\n"
             "Required keys:\n"
-            " - intent: one of \"compare_fees_nominated\", \"compare_fees_all\", \"find_cheapest\", \"project_balance\", \"retirement_income\", or \"unknown\"\n"
+            " - intent: one of \"compare_fees_nominated\", \"compare_fees_all\", \"find_cheapest\", \"project_balance\", \"compare_balance_projection\", \"retirement_income\", or \"unknown\"\n"
             " - current_fund: the name of the user's current super fund, if mentioned\n"
             " - nominated_fund: the name of the fund the user wishes to compare against, if mentioned by the user or in the previous system response\n"
             " - current_age: the user's age as an integer\n"

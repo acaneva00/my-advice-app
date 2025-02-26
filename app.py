@@ -218,6 +218,7 @@ def chat_fn(user_message, history, state):
                     "current_income": state["data"].get("current_income", 0),
                     "retirement_age": state["data"].get("retirement_age", 0),
                     "current_fund": state["data"].get("current_fund"),
+                    "nominated_fund": state["data"].get("nominated_fund"),
                     "intent": state["data"].get("intent"),
                     "previous_var": state["data"].get("last_var")
                 })
@@ -275,11 +276,21 @@ def chat_fn(user_message, history, state):
     
     return history, state, ""
 
+# Modified Gradio initialization to ensure HTML rendering works
+# Replace the Gradio UI section in app.py with this
+
 with gr.Blocks() as demo:
-    chatbot = gr.Chatbot(
-        render=True,  # Enable HTML rendering
-        height=600    # Adjust height as needed
+    # Define your welcome message.
+    initial_message = (
+        "Hi there, I'm your friendly money mentor. "
+        "My goal is to help you make informed, confident decisions about your money. "
+        "You can start by asking me a question. " 
+        "For example, would you like to know the cheapest superfund for you, or an estimate of your super balance at retirement? "
+        "If there's something else on your mind, just let me know!"
     )
+    
+    # Pre-populate the chatbot with the welcome message.
+    chatbot = gr.Chatbot(value=[("", initial_message)], render=True, height=600)
     state = gr.State(None)
     with gr.Row():
         txt = gr.Textbox(
