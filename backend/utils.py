@@ -4,24 +4,20 @@ import json
 import pandas as pd
 import openai
 from openai import OpenAI
+from backend.cashflow import calculate_income_net_of_super, calculate_after_tax_income
 
 def filter_dataframe_by_fund_name(df, fund_name, exact_match=False):
     """
     Safely filter a DataFrame by fund name, handling special characters properly.
-    
-    Args:
-        df: DataFrame to filter
-        fund_name: The fund name to search for
-        exact_match: If True, use exact matching; if False, use contains with escaped characters
-        
-    Returns:
-        Filtered DataFrame
     """
-    import re
+    print(f"DEBUG filter_dataframe_by_fund_name: Filtering for '{fund_name}', exact_match={exact_match}")
     
     if exact_match:
+        # For exact matching, use straight equality (this handles special characters correctly)
         return df[df["FundName"] == fund_name]
     else:
+        # For contains matching, escape any regex special characters first
+        import re
         escaped_fund_name = re.escape(fund_name)
         return df[df["FundName"].str.contains(escaped_fund_name, case=False, na=False)]
 
@@ -240,7 +236,7 @@ def find_cheapest_superfund(df: pd.DataFrame, balance: float, investment_needs: 
     }
     return result
 
-def project_super_balance(current_age: int, retirement_age: int, current_balance: float, current_income: float,
+def project_super_balance(current_age: int, retirement_age: int, current_balance: float, income_net_of_super: float,
                           wage_growth: float, employer_contribution_rate: float, investment_return: float,
                           inflation_rate: float, current_fund_row: pd.Series) -> float:
     """
@@ -250,7 +246,7 @@ def project_super_balance(current_age: int, retirement_age: int, current_balance
         current_age: Current age
         retirement_age: Target retirement age
         current_balance: Current super balance
-        current_income: Current annual income (starting salary)
+        income_net_of_super: Current annual income excluding super (starting salary)
         wage_growth: Annual wage growth rate (percentage)
         employer_contribution_rate: Employer contribution rate (percentage)
         investment_return: Expected annual investment return (percentage)
@@ -265,7 +261,7 @@ def project_super_balance(current_age: int, retirement_age: int, current_balance
     
     print(f"Initial values:")
     print(f"  Starting balance: ${balance:,.2f}")
-    print(f"  Starting annual salary: ${current_income:,.2f}")
+    print(f"  Starting annual salary: ${income_net_of_super:,.2f}")
     print(f"  Employer contribution rate: {employer_contribution_rate}%")
     print(f"  Annual wage growth rate: {wage_growth}%")
     print("--------------------------------------------------")
@@ -279,7 +275,7 @@ def project_super_balance(current_age: int, retirement_age: int, current_balance
         year = (month - 1) // 12
         
         # Calculate current annual salary with compound growth
-        current_annual_salary = current_income * ((1 + wage_growth/100) ** year)
+        current_annual_salary = income_net_of_super * ((1 + wage_growth/100) ** year)
         
         # Calculate monthly contribution from current annual salary
         monthly_contribution = (current_annual_salary * employer_contribution_rate / 100) / 12

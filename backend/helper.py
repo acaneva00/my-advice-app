@@ -3,6 +3,7 @@ from openai import OpenAI
 import json
 import time
 import logging
+from backend.cashflow import calculate_income_net_of_super, calculate_after_tax_income
 
 # Check for OpenAI API key
 if not os.environ.get("OPENAI_API_KEY"):
@@ -115,7 +116,9 @@ def get_variable_description(var_key: str) -> str:
         "current_fund": "superfund",
         "current_income": "current annual income",
         "retirement_age": "desired retirement age",
-        "nominated_fund": "nominated fund"
+        "nominated_fund": "nominated fund",
+        "super_included": "whether the income provided includes super contributions or if they are paid on top",
+        "income_net_of_super": "income excluding super contributions"
     }
     return descriptions.get(var_key, var_key)
 
@@ -147,7 +150,9 @@ def extract_intent_variables(user_query: str, previous_system_response: str = ""
             " - current_age: the user's age as an integer\n"
             " - current_balance: the user's super balance (in dollars) as a number\n"
             " - current_income: the user's annual income (in dollars) as a number. Look for patterns like '$X income', 'income of $X', 'earning $X', etc.\n"
-            " - retirement_age: the user's retirement age as an integer. Look for patterns like 'retiring at X', 'retirement age X', etc.\n\n"
+            " - retirement_age: the user's retirement age as an integer. Look for patterns like 'retiring at X', 'retirement age X', etc.\n"
+            " - super_included: boolean indicating if the income includes super (true) or if super is paid on top (false)\n"
+            " - income_net_of_super: the income excluding superannuation contributions\n\n"
             "For numeric values:\n"
             "- Convert k/K to thousands (e.g., 150k = 150000)\n"
             "- Convert m/M to millions (e.g., 1.5m = 1500000)\n"
@@ -193,8 +198,11 @@ def extract_intent_variables(user_query: str, previous_system_response: str = ""
                 "current_age": 0,
                 "current_balance": 0,
                 "current_income": 0,
-                "retirement_age": 0
+                "retirement_age": 0,
+                "super_included": None,
+                "income_net_of_super": 0
             }
+
             default_data.update(data)
             return default_data
         except Exception as e:

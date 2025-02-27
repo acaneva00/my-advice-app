@@ -6,6 +6,7 @@ from backend.constants import economic_assumptions
 from typing import Union, Tuple
 from openai import OpenAI
 from backend.charts import generate_fee_bar_chart
+from backend.cashflow import calculate_income_net_of_super, calculate_after_tax_income
 from backend.utils import (
     parse_age_from_query,
     parse_balance_from_query,
@@ -353,6 +354,7 @@ def process_project_balance(context: dict) -> str:
     retirement_age = context["retirement_age"]
     user_balance = context["current_balance"]
     current_income = context["current_income"]
+    super_included = context.get("super_included", False)
     
     print(f"DEBUG main.py: Searching for fund: {current_fund}")
     matched_fund = match_fund_name(current_fund, df)
@@ -375,11 +377,14 @@ def process_project_balance(context: dict) -> str:
     investment_return = economic_assumptions["INVESTMENT_RETURN"]
     inflation_rate = economic_assumptions["INFLATION_RATE"]
     
+    # Calculate income net of super using the imported function
+    income_net_of_super = calculate_income_net_of_super(current_income, super_included, employer_contribution_rate)
+    
     projected_balance = project_super_balance(
         int(user_age), 
         int(retirement_age), 
         float(user_balance), 
-        float(current_income),
+        float(income_net_of_super),  # Use income net of super here
         wage_growth, 
         employer_contribution_rate, 
         investment_return, 
@@ -392,12 +397,14 @@ def process_project_balance(context: dict) -> str:
         f"Current age: {user_age}\n"
         f"Current balance: ${user_balance:,.0f}\n"
         f"Current income: ${current_income:,.0f}\n"
+        f"Income net of super: ${income_net_of_super:,.0f}\n"
         f"Desired retirement age: {retirement_age}\n"
         f"Assumptions: Wage growth = {wage_growth}%, Employer contribution rate = {employer_contribution_rate}%, "
         f"Gross investment return = {investment_return}%, Inflation rate = {inflation_rate}%.\n"
         f"Using your current fund's fee structure (which is recalculated monthly), the projected super balance at retirement is: "
         f"${projected_balance:,.0f}."
     )
+    
     system_prompt = (
         "You are a financial guru specializing in superannuation projections. "
         "Based solely on the data provided, produce a response EXACTLY in the following format:\n\n"
@@ -405,6 +412,7 @@ def process_project_balance(context: dict) -> str:
         "Then, in one concise sentence, explain the primary factors driving this projection, "
         "specifically highlighting the impact of your current fund's fees (which are recalculated monthly), investment performance, wage growth, and inflation."
     )
+    
     return ask_llm(system_prompt, user_prompt)
 
 def process_compare_balance_projection(context: dict) -> str:
@@ -415,6 +423,11 @@ def process_compare_balance_projection(context: dict) -> str:
     retirement_age = context["retirement_age"]
     user_balance = context["current_balance"]
     current_income = context["current_income"]
+    super_included = context.get("super_included", False)
+
+    # Calculate income net of super
+    employer_contribution_rate = economic_assumptions["EMPLOYER_CONTRIBUTION_RATE"]
+    income_net_of_super = calculate_income_net_of_super(current_income, super_included, employer_contribution_rate)
     
     print(f"DEBUG main.py: Searching for funds: {current_fund} and {nominated_fund}")
     
@@ -430,7 +443,7 @@ def process_compare_balance_projection(context: dict) -> str:
     
     print(f"DEBUG main.py: Matched fund names: {matched_current_fund} and {matched_nominated_fund}")
     
-    # Get rows for both funds
+    # Replace with this code
     current_fund_rows = find_applicable_funds(
         filter_dataframe_by_fund_name(df, matched_current_fund, exact_match=True),
         user_age
@@ -459,7 +472,7 @@ def process_compare_balance_projection(context: dict) -> str:
         int(user_age), 
         int(retirement_age), 
         float(user_balance), 
-        float(current_income),
+        float(income_net_of_super),  
         wage_growth, 
         employer_contribution_rate, 
         investment_return, 
@@ -471,7 +484,7 @@ def process_compare_balance_projection(context: dict) -> str:
         int(user_age), 
         int(retirement_age), 
         float(user_balance), 
-        float(current_income),
+        float(income_net_of_super),  
         wage_growth, 
         employer_contribution_rate, 
         investment_return, 
@@ -491,7 +504,8 @@ def process_compare_balance_projection(context: dict) -> str:
         f"Data:\n"
         f"Current age: {user_age}\n"
         f"Current balance: ${user_balance:,.0f}\n"
-        f"Current income: ${current_income:,.0f}\n"
+        f"Current income (as provided): ${current_income:,.0f}\n"
+        f"Income net of super: ${income_net_of_super:,.0f}\n"
         f"Desired retirement age: {retirement_age}\n"
         f"Current fund: {matched_current_fund}\n"
         f"Nominated fund: {matched_nominated_fund}\n"
@@ -742,6 +756,10 @@ def process_query(user_query: str, previous_system_response: str = "", full_hist
                 else:
                     state["data"]["nominated_fund"] = temp_fund
             
+            if "super_included" in extracted and extracted["super_included"] is not None:
+                state["data"]["super_included"] = extracted["super_included"]
+                print(f"DEBUG main.py: Updated super_included to {extracted['super_included']}")
+
             # For numeric values, only update if we don't already have values from the variable collection process
             if not any(state["data"].get(key) for key in ["current_age", "current_balance", "current_income", "retirement_age"]):
                 for key in ["current_age", "current_balance", "current_income", "retirement_age"]:
@@ -774,6 +792,13 @@ def process_query(user_query: str, previous_system_response: str = "", full_hist
     print("DEBUG main.py: Determining missing variables")
     print("DEBUG main.py: Current state:", state)
     
+    # Always prioritize super_included right after current_income
+    if state["data"].get("current_income", 0) > 0 and state["data"].get("super_included") is None:
+        missing_vars.append("super_included")
+        # If we're asking about super_included, prioritize it over all other missing vars
+        if missing_vars:
+            return get_unified_variable_response("super_included", None, context, missing_vars)
+
     # Only add to missing_vars if we don't already have a valid value
     if intent == "project_balance":
         print("DEBUG main.py: Checking missing variables for project_balance intent")
@@ -820,7 +845,7 @@ def process_query(user_query: str, previous_system_response: str = "", full_hist
         if not state["data"].get("current_balance"):
             missing_vars.append("super balance")
 
-        # For compare_balance_projection
+    # For compare_balance_projection
     if intent == "compare_balance_projection":
         if not state["data"].get("current_age"):
             missing_vars.append("age")

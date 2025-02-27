@@ -2,6 +2,7 @@ import gradio as gr
 from backend.main import process_query, parse_numeric_with_suffix, validate_response, get_clarification_prompt, df
 from backend.helper import ask_llm, get_unified_variable_response
 from backend.utils import match_fund_name
+from backend.cashflow import calculate_income_net_of_super, calculate_after_tax_income
 import json
 
 def extract_variable_from_response(last_prompt: str, user_message: str, context: dict, missing_var: str) -> dict:
@@ -18,7 +19,8 @@ def extract_variable_from_response(last_prompt: str, user_message: str, context:
         "current fund": "current_fund",
         "nominated fund": "nominated_fund",
         "current_age": "current_age",
-        "retirement_age": "retirement_age"
+        "retirement_age": "retirement_age",
+        "super_included": "super_included"
     }
     
     # Define which variables should be treated as numbers
@@ -29,6 +31,9 @@ def extract_variable_from_response(last_prompt: str, user_message: str, context:
         "retirement_age": "int"
     }
     
+    # Define which variables should be treated as booleans
+    boolean_vars = ["super_included"]
+
     expected_var = var_map.get(missing_var, missing_var)
 
     print("DEBUG extract_variable_from_response: Missing variable:")
@@ -101,7 +106,23 @@ def extract_variable_from_response(last_prompt: str, user_message: str, context:
             except ValueError:
                 print(f"DEBUG: Could not convert value {raw_value} to number")
                 return {'variable': expected_var, 'value': None}
-                
+        
+        # Add handling for boolean responses
+        if expected_var in boolean_vars:
+            if isinstance(raw_value, str):
+                raw_value = raw_value.lower().strip()
+                if raw_value in ["yes", "true", "included", "includes", "part of", "package"]:
+                    data['value'] = True
+                elif raw_value in ["no", "false", "not included", "separate", "on top", "additional"]:
+                    data['value'] = False
+                else:
+                    # Try to use LLM to interpret ambiguous responses
+                    interpret_prompt = f"Does this response indicate that super is INCLUDED in the income amount or PAID ON TOP? Response: '{raw_value}'"
+                    interpretation = ask_llm("You are a boolean interpreter. Answer with ONLY 'included' or 'on top'.", interpret_prompt)
+                    data['value'] = interpretation.lower().strip() == "included"
+            elif isinstance(raw_value, bool):
+                data['value'] = raw_value
+
         return data
     except json.JSONDecodeError as e:
         print("DEBUG extract_variable_from_response: Error parsing JSON:", e)
@@ -178,6 +199,26 @@ def chat_fn(user_message, history, state):
             # Store the previous variable before updating with new one
             state["data"]["last_var"] = var_marker
             print(f"DEBUG app.py: Stored last_var: {var_marker}")
+
+            # After extracting current_income, immediately check for super_included
+            if extraction.get("variable") == "current_income" and extraction.get("value") is not None:
+                # Store the income value first
+                state["data"]["current_income"] = extraction["value"]
+                
+                # Immediately follow up with super_included question
+                context.update({
+                    "current_income": extraction["value"],
+                    "previous_var": "current income"
+                })
+                
+                # Set super_included as the next missing variable
+                unified_message = get_unified_variable_response("super_included", None, context, ["super_included"])
+                state["data"]["last_clarification_prompt"] = unified_message
+                state["missing_var"] = "super_included"
+                
+                # Add the current conversation exchange to history in Gradio format
+                history.append((user_message, unified_message))
+                return history, state, ""
 
             # Handle fund name standardization
             if var_key in ["current_fund", "nominated_fund"]:
