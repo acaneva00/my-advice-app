@@ -126,12 +126,13 @@ def extract_intent_variables(user_query: str, previous_system_response: str = ""
     """
     Uses the LLM to extract key variables from a user query and the most recent system response.
     Expected output is a JSON object with the following keys:
-      - intent: one of "compare_fees_nominated", "compare_fees_all", "find_cheapest", "project_balance", "retirement_income", or "unknown"
+      - intent: one of "compare_fees_nominated", "compare_fees_all", "find_cheapest", "project_balance", "compare_balance_projection", "retirement_income", or "unknown"
       - current_fund: the name of the user's current super fund (if mentioned)
       - nominated_fund: the name of the fund the user wishes to compare against (if mentioned)
       - current_age: the user's age as an integer
       - current_balance: the user's super balance (in dollars) as a number
       - current_income: the user's annual income (in dollars) as a number
+      - super_included: a boolean instructing whether or not the current_income includes or excludes employer super contributions.\n"
       - retirement_age: the user's retirement age as an integer
     For numeric values:
       - Convert k/K to thousands (e.g., 150k = 150000)
@@ -151,7 +152,7 @@ def extract_intent_variables(user_query: str, previous_system_response: str = ""
             " - current_balance: the user's super balance (in dollars) as a number\n"
             " - current_income: the user's annual income (in dollars) as a number. Look for patterns like '$X income', 'income of $X', 'earning $X', etc.\n"
             " - retirement_age: the user's retirement age as an integer. Look for patterns like 'retiring at X', 'retirement age X', etc.\n"
-            " - super_included: boolean indicating if the income includes super (true) or if super is paid on top (false)\n"
+            " - super_included: IMPORTANT - ONLY set this to true or false if the user EXPLICITLY states whether their income includes super or not. If not explicitly stated, do not update this variable.\n"
             " - income_net_of_super: the income excluding superannuation contributions\n\n"
             "For numeric values:\n"
             "- Convert k/K to thousands (e.g., 150k = 150000)\n"
@@ -202,8 +203,8 @@ def extract_intent_variables(user_query: str, previous_system_response: str = ""
                 "super_included": None,
                 "income_net_of_super": 0
             }
-
             default_data.update(data)
+            print(f"DEBUG helper.py: Final extracted data before returning: {default_data}")
             return default_data
         except Exception as e:
             print("DEBUG intent_extractor.py: Error parsing JSON:", e)

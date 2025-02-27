@@ -194,9 +194,17 @@ def process_compare_fees_nominated(context: dict) -> str:
     current_fund_match = match_fund_name(current_fund, df)
     nominated_fund_match = match_fund_name(nominated_fund, df)
     
+    # Fix for quoted strings or other issues
+    if isinstance(current_fund_match, str):
+        current_fund_match = current_fund_match.strip("'\"")
+    if isinstance(nominated_fund_match, str):
+        nominated_fund_match = nominated_fund_match.strip("'\"")
+    
+    print(f"DEBUG main.py: After cleaning - current_fund_match: {current_fund_match}, nominated_fund_match: {nominated_fund_match}")
+    
     if not current_fund_match or not nominated_fund_match:
-        return f"Could not find one or both funds: {current_fund}, {nominated_fund}"
-        
+        return f"Could not find one or both funds: {current_fund}, {nominated_fund}"        
+    
     # Find applicable funds
     current_rows = find_applicable_funds(filter_dataframe_by_fund_name(df, current_fund_match), user_age)
     nominated_rows = find_applicable_funds(filter_dataframe_by_fund_name(df, nominated_fund_match), user_age)
@@ -647,7 +655,7 @@ def process_query(user_query: str, previous_system_response: str = "", full_hist
             print(f"DEBUG main.py: Preserving existing intent while collecting variables: {extracted['intent']}")
 
     print(f"DEBUG main.py: LLM extracted variables: {extracted}")
-
+    print(f"DEBUG main.py: Values right after extraction: super_included={extracted.get('super_included')}")
     
     # Handle intent and check if it's new
     intent = extracted.get("intent", "unknown")
@@ -755,7 +763,7 @@ def process_query(user_query: str, previous_system_response: str = "", full_hist
                     state["data"]["nominated_fund"] = matched_fund
                 else:
                     state["data"]["nominated_fund"] = temp_fund
-            
+            print(f"DEBUG main.py: Before updating super_included, current value: {state['data'].get('super_included')}")
             if "super_included" in extracted and extracted["super_included"] is not None:
                 state["data"]["super_included"] = extracted["super_included"]
                 print(f"DEBUG main.py: Updated super_included to {extracted['super_included']}")
@@ -792,13 +800,6 @@ def process_query(user_query: str, previous_system_response: str = "", full_hist
     print("DEBUG main.py: Determining missing variables")
     print("DEBUG main.py: Current state:", state)
     
-    # Always prioritize super_included right after current_income
-    if state["data"].get("current_income", 0) > 0 and state["data"].get("super_included") is None:
-        missing_vars.append("super_included")
-        # If we're asking about super_included, prioritize it over all other missing vars
-        if missing_vars:
-            return get_unified_variable_response("super_included", None, context, missing_vars)
-
     # Only add to missing_vars if we don't already have a valid value
     if intent == "project_balance":
         print("DEBUG main.py: Checking missing variables for project_balance intent")
@@ -811,12 +812,16 @@ def process_query(user_query: str, previous_system_response: str = "", full_hist
         if not state["data"].get("current_balance"):
             missing_vars.append("super balance")
             print("DEBUG main.py: Missing variable: super balance")
-        if not state["data"].get("current_income"):
-            missing_vars.append("current income")
-            print("DEBUG main.py: Missing variable: current income")
         if not state["data"].get("retirement_age") or state["data"].get("retirement_age") <= state["data"].get("current_age", 0):
             missing_vars.append("desired retirement age")
             print("DEBUG main.py: Missing variable: desired retirement age")
+        if not state["data"].get("current_income"):
+            missing_vars.append("current income")
+            print("DEBUG main.py: Missing variable: current income")
+        if state["data"].get("current_income", 0) > 0 and state["data"].get("super_included") is None:
+            missing_vars.append("super_included")
+            print("DEBUG main.py: Missing variable: super_included")
+
     
     # For find_cheapest
     if intent == "find_cheapest":
@@ -855,10 +860,14 @@ def process_query(user_query: str, previous_system_response: str = "", full_hist
             missing_vars.append("nominated fund")
         if not state["data"].get("current_balance"):
             missing_vars.append("super balance")
-        if not state["data"].get("current_income"):
-            missing_vars.append("current income")
         if not state["data"].get("retirement_age") or state["data"].get("retirement_age") <= state["data"].get("current_age", 0):
             missing_vars.append("desired retirement age")
+        if not state["data"].get("current_income"):
+            missing_vars.append("current income")
+        if state["data"].get("current_income", 0) > 0 and state["data"].get("super_included") is None:
+            missing_vars.append("super_included")
+            print("DEBUG main.py: Missing variable: super_included")
+
     
     # If any variables are missing, generate a structured prompt using the LLM
     if missing_vars:

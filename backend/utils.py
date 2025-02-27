@@ -58,6 +58,7 @@ Return the exact matching fund name from the list, or 'None' if no match found."
     )
     
     matched_name = response.choices[0].message.content.strip()
+    matched_name = matched_name.strip("'\"")
     print(f"DEBUG: Fund name matcher - Input: {input_fund}, Matched: {matched_name}")
     if matched_name == 'None' or matched_name not in fund_names:
         return None
@@ -148,28 +149,44 @@ def find_applicable_funds(df: pd.DataFrame, user_age: int):
     print(f"DEBUG utils.py: First few fund names in df: {df['FundName'].head().tolist()}")
     
     # If this is a filtered dataframe (i.e., searching for a specific fund)
-    is_filtered = len(df) < len(df.copy())
+    original_df_size = len(df.copy())
+    is_filtered = len(df) < original_df_size
     print(f"DEBUG utils.py: Is filtered dataframe: {is_filtered}")
     
-    if is_filtered:
-        fund_name = df.iloc[0]['FundName'] if not df.empty else None
-        print(f"DEBUG utils.py: Working with filtered df, fund_name: {fund_name}")
-        if fund_name:
-            matched_fund = match_fund_name(fund_name, df.copy())
-            print(f"DEBUG utils.py: After matching, matched_fund: {matched_fund}")
-            if matched_fund is None:
-                print("DEBUG utils.py: No match found, returning empty DataFrame")
-                return pd.DataFrame()
-            df = df[df['FundName'] == matched_fund]
-            print(f"DEBUG utils.py: After filtering for matched fund, df has {len(df)} rows")
+    # For fee comparison, when we're already filtering by fund name,
+    # just return the dataframe as is if it's not empty
+    if is_filtered and not df.empty:
+        print("DEBUG utils.py: Already filtered by fund name and not empty, returning as is")
+        # Check if there's already an exact age match
+        df["ApproachType"] = df["ApproachType"].fillna("").astype(str)
+        age_match = df[(df["ApproachType"].str.upper() == "AGE") & 
+                      (df["AgeMin"].astype(float) <= user_age) & 
+                      (df["AgeMax"].astype(float) >= user_age)]
+        
+        if not age_match.empty:
+            print("DEBUG utils.py: Found age match in filtered data, returning that")
+            return age_match
+        else:
+            print("DEBUG utils.py: No age match in filtered data, returning first row")
+            return df.head(1)
     
     # Ensure ApproachType is string
     df["ApproachType"] = df["ApproachType"].fillna("").astype(str)
     sub = df[df["ApproachType"].str.upper() == "AGE"].copy()
     print(f"DEBUG utils.py: After AGE approach filter, df has {len(sub)} rows")
     
+    # Try to find an exact match for age
     matches = sub[(sub["AgeMin"].astype(float) <= user_age) & (sub["AgeMax"].astype(float) >= user_age)]
     print(f"DEBUG utils.py: After age range filter, found {len(matches)} matches")
+    
+    # If no matches found and we're not doing a fund name search, try a broader approach
+    if matches.empty and not is_filtered:
+        # For general search, try returning all funds with default values
+        default_funds = df[df["ApproachType"].str.upper() == "AGE"].drop_duplicates(subset=["FundName"])
+        if not default_funds.empty:
+            print(f"DEBUG utils.py: No age matches, returning {len(default_funds)} default funds")
+            return default_funds
+    
     return matches
 
 def retrieve_relevant_context(query, text_corpus, top_k=1):

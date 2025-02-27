@@ -139,7 +139,7 @@ def chat_fn(user_message, history, state):
     
     # Initialize state if needed
     if state is None or not isinstance(state, dict):
-        state = {"data": {}, "missing_var": None}
+        state = {"data": {"super_included": None}, "missing_var": None}
     if history is None:
         history = []
 
@@ -200,26 +200,6 @@ def chat_fn(user_message, history, state):
             state["data"]["last_var"] = var_marker
             print(f"DEBUG app.py: Stored last_var: {var_marker}")
 
-            # After extracting current_income, immediately check for super_included
-            if extraction.get("variable") == "current_income" and extraction.get("value") is not None:
-                # Store the income value first
-                state["data"]["current_income"] = extraction["value"]
-                
-                # Immediately follow up with super_included question
-                context.update({
-                    "current_income": extraction["value"],
-                    "previous_var": "current income"
-                })
-                
-                # Set super_included as the next missing variable
-                unified_message = get_unified_variable_response("super_included", None, context, ["super_included"])
-                state["data"]["last_clarification_prompt"] = unified_message
-                state["missing_var"] = "super_included"
-                
-                # Add the current conversation exchange to history in Gradio format
-                history.append((user_message, unified_message))
-                return history, state, ""
-
             # Handle fund name standardization
             if var_key in ["current_fund", "nominated_fund"]:
                 standardized = match_fund_name(raw_value, df)
@@ -243,11 +223,13 @@ def chat_fn(user_message, history, state):
                 missing_vars.append("current fund")
             if state["data"].get("intent") == "compare_fees_nominated" and not state["data"].get("nominated_fund"):
                 missing_vars.append("nominated fund")
-            if state["data"].get("intent") == "project_balance":
-                if state["data"].get("current_income", 0) <= 0:
-                    missing_vars.append("current income")
+            if state["data"].get("intent") in ["project_balance", "compare_balance_projection"]:
                 if state["data"].get("retirement_age", 0) <= state["data"].get("current_age", 0):
                     missing_vars.append("desired retirement age")
+                if state["data"].get("current_income", 0) <= 0:
+                    missing_vars.append("current income")
+            if state["data"].get("current_income", 0) > 0 and state["data"].get("super_included") is None:
+                missing_vars.append("super_included")
             
             # If there are still missing variables, request the next one
             if missing_vars:
