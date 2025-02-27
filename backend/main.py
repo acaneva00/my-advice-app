@@ -387,7 +387,8 @@ def process_project_balance(context: dict) -> str:
     
     # Calculate income net of super using the imported function
     income_net_of_super = calculate_income_net_of_super(current_income, super_included, employer_contribution_rate)
-    
+    print(f"DEBUG main.py: Calculated income_net_of_super: {income_net_of_super}, using super_included={super_included}")
+
     projected_balance = project_super_balance(
         int(user_age), 
         int(retirement_age), 
@@ -786,6 +787,7 @@ def process_query(user_query: str, previous_system_response: str = "", full_hist
         "retirement_age": state["data"].get("retirement_age", 0) or None,
         "current_fund": state["data"].get("current_fund"),  # Fixed this line
         "nominated_fund": state["data"].get("nominated_fund"),  # And this line
+        "super_included": state["data"].get("super_included"),  # Add this line
         "intent": intent,
         "is_new_intent": is_new_intent,
         "previous_var": state["data"].get("last_var")
