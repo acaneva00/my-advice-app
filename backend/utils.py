@@ -6,6 +6,7 @@ import openai
 from openai import OpenAI
 from backend.cashflow import calculate_income_net_of_super, calculate_after_tax_income
 
+
 def filter_dataframe_by_fund_name(df, fund_name, exact_match=False):
     """
     Safely filter a DataFrame by fund name, handling special characters properly.
@@ -294,8 +295,8 @@ def project_super_balance(current_age: int, retirement_age: int, current_balance
         # Calculate current annual salary with compound growth
         current_annual_salary = income_net_of_super * ((1 + wage_growth/100) ** year)
         
-        # Calculate monthly contribution from current annual salary
-        monthly_contribution = (current_annual_salary * employer_contribution_rate / 100) / 12
+        # Calculate monthly contribution from current annual salary after 15% contributions tax
+        monthly_contribution = (current_annual_salary * employer_contribution_rate / 100) * 0.85 / 12
         
         # Store previous balance for logging
         previous_balance = balance
@@ -324,7 +325,7 @@ def project_super_balance(current_age: int, retirement_age: int, current_balance
     return balance
 
 def calculate_retirement_drawdown(retirement_balance: float, retirement_age: int, annual_income: float, 
-                                 investment_return: float, inflation_rate: float) -> int:
+                                 investment_return: float, inflation_rate: float, current_fund_row: pd.Series = None) -> int:
     """
     Calculate when retirement savings will be depleted, given a retirement balance,
     annual income drawdown, and investment returns.
@@ -335,6 +336,7 @@ def calculate_retirement_drawdown(retirement_balance: float, retirement_age: int
         annual_income: Annual income desired in retirement
         investment_return: Expected annual investment return (percentage)
         inflation_rate: Expected annual inflation rate (percentage)
+        current_fund_row: DataFrame row containing fund fee structure
         
     Returns:
         Age at which retirement savings will be depleted
@@ -356,9 +358,17 @@ def calculate_retirement_drawdown(retirement_balance: float, retirement_age: int
     print("--------------------------------------------------")
     
     while balance > 0 and months < 1200:  # Cap at 100 years (1200 months) to prevent infinite loops
-        # Each month, add investment returns and subtract income
+        # Calculate fees if fund information is provided
+        monthly_fee = 0
+        if current_fund_row is not None:
+            fee_breakdown = compute_fee_breakdown(current_fund_row, balance)
+            monthly_fee = fee_breakdown.get("total_fee", 0.0) / 12.0
+            
+        # Calculate investment growth
         investment_growth = balance * net_monthly_return
-        balance = balance + investment_growth - monthly_income
+
+        # Update balance with investment growth, fees, and income drawdown
+        balance = balance + investment_growth - monthly_fee - monthly_income
         
         months += 1
         
@@ -367,8 +377,10 @@ def calculate_retirement_drawdown(retirement_balance: float, retirement_age: int
             current_age = retirement_age + years
             print(f"After {years} years (age {current_age}):")
             print(f"  Remaining balance: ${balance:,.2f}")
-            print("--------------------------------------------------")
-        
+            if current_fund_row is not None:
+                print(f"  Monthly fee: ${monthly_fee:.2f}")
+            print("--------------------------------------------------")        
+
         if balance <= 0:
             break
     
