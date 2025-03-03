@@ -1,6 +1,6 @@
 import gradio as gr
 from backend.main import process_query, parse_numeric_with_suffix, validate_response, get_clarification_prompt, df
-from backend.helper import ask_llm, get_unified_variable_response
+from backend.helper import ask_llm, get_unified_variable_response, update_calculated_values
 from backend.utils import match_fund_name
 from backend.cashflow import calculate_income_net_of_super, calculate_after_tax_income
 import json
@@ -19,9 +19,12 @@ def extract_variable_from_response(last_prompt: str, user_message: str, context:
         "desired retirement age": "retirement_age",
         "current fund": "current_fund",
         "nominated fund": "nominated_fund",
-        "current_age": "current_age",
-        "retirement_age": "retirement_age",
-        "super_included": "super_included"
+        "super_included": "super_included",
+        "income_net_of_super": "income_net_of_super",
+        "after_tax_income": "after_tax_income",
+        "retirement_balance": "retirement_balance",
+        "retirement_income": "retirement_income",
+        "retirement_drawdown_age": "retirement_drawdown_age"
     }
     
     # Define which variables should be treated as numbers
@@ -29,7 +32,12 @@ def extract_variable_from_response(last_prompt: str, user_message: str, context:
         "current_age": "int",
         "current_balance": "float",
         "current_income": "float",
-        "retirement_age": "int"
+        "retirement_age": "int",
+        "income_net_of_super": "flaot",
+        "after_tax_income": "float",	
+        "retirement_balance": "float",
+        "retirement_income": "float",
+        "retirement_drawdown_age": "int"
     }
     
     # Define which variables should be treated as booleans
@@ -238,6 +246,10 @@ def chat_fn(user_message, history, state):
             state["data"][var_key] = raw_value
             print(f"DEBUG app.py: Updated state with {var_key}: {raw_value}")
 
+            # Update calculated values based on available data
+            state = update_calculated_values(state)
+            print(f"DEBUG app.py: Updated calculated values in state: {state}")
+            
             # Format value for acknowledgment
             formatted_value = f"${raw_value:,.0f}" if var_key in ["current_balance", "current_income"] else raw_value
 

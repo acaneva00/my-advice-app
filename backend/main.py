@@ -21,7 +21,7 @@ from backend.utils import (
     calculate_retirement_drawdown, 
     get_asfa_standards 
 )
-from backend.helper import extract_intent_variables, get_unified_variable_response, ask_llm
+from backend.helper import extract_intent_variables, get_unified_variable_response, ask_llm, update_calculated_values
 
 # System prompts for LLM
 SYSTEM_PROMPTS = {
@@ -391,7 +391,7 @@ def process_project_balance(context: dict) -> str:
     income_net_of_super = calculate_income_net_of_super(current_income, super_included, employer_contribution_rate)
     print(f"DEBUG main.py: Calculated income_net_of_super: {income_net_of_super}, using super_included={super_included}")
 
-    projected_balance = 0(
+    projected_balance = project_super_balance(
         int(user_age), 
         int(retirement_age), 
         float(user_balance), 
@@ -700,7 +700,7 @@ def process_retirement_outcome(context: dict) -> str:
     return ask_llm(system_prompt, user_prompt)
 
 def get_retirement_income_options_prompt(retirement_balance: float, after_tax_income: float) -> str:
-    """Generate a prompt explaining retirement income options"""
+    """Generate a prompt explaining retirement income options with proper values"""
     asfa_standards = get_asfa_standards()
 
     # Ensure we have non-negative values
@@ -719,10 +719,6 @@ def get_retirement_income_options_prompt(retirement_balance: float, after_tax_in
         "Avoid letter formats like 'Dear User' or "
         "'Best wishes'. Speak directly to the person in a conversational way."
     )
-    
-    # Format values for display
-    formatted_balance = f"${retirement_balance:,.0f}"
-    formatted_income = f"${after_tax_income:,.0f}"
     
     user_prompt = (
         f"Please explain these retirement income options to the user with this specific introduction:\n\n"
@@ -913,8 +909,14 @@ def process_query(user_query: str, previous_system_response: str = "", full_hist
                 "current income": "current_income",
                 "desired retirement age": "retirement_age",
                 "current fund": "current_fund",
-                "nominated fund": "nominated_fund"
-            }
+                "nominated fund": "nominated_fund",
+                "super_included": "super_included",
+                "income_net_of_super": "income_net_of_super",
+                "after_tax_income": "after_tax_income",
+                "retirement_balance": "retirement_balance",
+                "retirement_income": "retirement_income",
+                "retirement_drawdown_age": "retirement_drawdown_age"
+            }           
             var_key = var_map.get(state["missing_var"], state["missing_var"])
             print(f"DEBUG main.py: Looking for extracted value for {var_key} (mapped from {state['missing_var']})")
             print(f"DEBUG main.py: Current state values: {state['data']}")
@@ -977,6 +979,10 @@ def process_query(user_query: str, previous_system_response: str = "", full_hist
             
         print("DEBUG main.py: Updated state after extraction:", state)
     
+    # Update calculated values based on available data
+    state = update_calculated_values(state)
+    print("DEBUG main.py: State after updating calculated values:", state)
+    
     # Build context dict for variable requests
     context = {
         "current_age": state["data"].get("current_age", 0) or None,
@@ -986,7 +992,12 @@ def process_query(user_query: str, previous_system_response: str = "", full_hist
         "current_fund": state["data"].get("current_fund"), 
         "nominated_fund": state["data"].get("nominated_fund"), 
         "super_included": state["data"].get("super_included"), 
-        "retirement_income_option": state.get("data", {}).get("retirement_income_option", None),
+        "retirement_income_option": state["data"].get("retirement_income_option"), 
+        "retirement_income": state["data"].get("retirement_income"), 
+        "income_net_of_super": state["data"].get("income_net_of_super"), 
+        "after_tax_income": state["data"].get("after_tax_income"), 
+        "retirement_balance": state["data"].get("retirement_balance"),
+        "retirement_drawdown_age": state["data"].get("retirement_drawdown_age"),
         "intent": intent,
         "is_new_intent": is_new_intent,
         "previous_var": state["data"].get("last_var")
@@ -1122,7 +1133,14 @@ def process_query(user_query: str, previous_system_response: str = "", full_hist
             "current_income": current_income if current_income > 0 else None,
             "retirement_age": retirement_age if retirement_age > 0 else None,
             "current_fund": state["data"].get("current_fund"),  # Fixed this line
-            "nominated_fund": state["data"].get("nominated_fund"),  # And this line
+            "nominated_fund": state["data"].get("nominated_fund"),
+            "super_included": state["data"].get("super_included"),
+            "retirement_income_option": state["data"].get("retirement_income_option"),
+            "retirement_income": state["data"].get("retirement_income"),
+            "income_net_of_super": state["data"].get("income_net_of_super"),
+            "after_tax_income": state["data"].get("after_tax_income"),
+            "retirement_balance": state["data"].get("retirement_balance"),
+            "retirement_drawdown_age": state["data"].get("retirement_drawdown_age"),
             "intent": intent,
             "is_new_intent": is_new_intent,
             "previous_var": state.get("data", {}).get("last_var")

@@ -4,6 +4,9 @@ import json
 import time
 import logging
 from backend.cashflow import calculate_income_net_of_super, calculate_after_tax_income
+from backend.constants import economic_assumptions
+from backend.utils import project_super_balance, match_fund_name, filter_dataframe_by_fund_name, find_applicable_funds
+import pandas as pd
 
 # Check for OpenAI API key
 if not os.environ.get("OPENAI_API_KEY"):
@@ -65,26 +68,24 @@ def get_unified_variable_response(var_key: str, raw_value, context: dict, missin
     # Special handling for retirement income option
     if var_key == "retirement_income_option":
         from backend.main import get_retirement_income_options_prompt
-        from backend.cashflow import calculate_after_tax_income
         
-        # Get the retirement balance either from calculated value or current balance
+        # Get the pre-calculated values from context
         retirement_balance = context.get("retirement_balance", 0)
+        after_tax_income = context.get("after_tax_income", 0)
+        
+        # Fall back to simpler calculations if they're not available
         if retirement_balance == 0 and context.get("current_balance"):
             retirement_balance = context.get("current_balance", 0)
-            # If we have age data, do a simple projection
             if context.get("current_age") and context.get("retirement_age"):
                 retirement_growth_years = context.get("retirement_age") - context.get("current_age")
-                retirement_balance = retirement_balance * (1.055 ** retirement_growth_years)  # Simple estimate
+                retirement_balance = retirement_balance * (1.055 ** retirement_growth_years)
         
-        # Calculate after-tax income safely handling None values
-        current_income = context.get("current_income")
-        retirement_age = context.get("retirement_age", 65)
-        
-        # Safe handling of potential None values
-        if current_income is not None and current_income > 0 and retirement_age is not None:
-            after_tax_income = calculate_after_tax_income(current_income, retirement_age)
-        else:
-            after_tax_income = 0
+        if after_tax_income == 0 and context.get("current_income"):
+            from backend.cashflow import calculate_after_tax_income
+            retirement_age = context.get("retirement_age", 65)
+            current_income = context.get("current_income")
+            if current_income is not None and current_income > 0 and retirement_age is not None:
+                after_tax_income = calculate_after_tax_income(current_income, retirement_age)
         
         return get_retirement_income_options_prompt(retirement_balance, after_tax_income)
 
@@ -253,3 +254,100 @@ def extract_intent_variables(user_query: str, previous_system_response: str = ""
         print(f"DEBUG intent_extractor.py: Unexpected error: {e}")
         raise
 
+def update_calculated_values(state):
+    """Calculate and update derived values based on available data in state"""
+    data = state.get("data", {})
+    
+    # Calculate income_net_of_super if prerequisites are met
+    if data.get("current_income") and data.get("super_included") is not None:
+        employer_rate = economic_assumptions["EMPLOYER_CONTRIBUTION_RATE"]
+        data["income_net_of_super"] = calculate_income_net_of_super(
+            data["current_income"], data["super_included"], employer_rate)
+    
+    # Calculate after_tax_income if prerequisites are met
+    if data.get("current_income") and data.get("current_age"):
+        data["after_tax_income"] = calculate_after_tax_income(
+            data["current_income"], data["current_age"])
+    
+    # Calculate retirement_balance if prerequisites are met
+    if (data.get("current_age") and data.get("retirement_age") and 
+        data.get("current_balance") and data.get("income_net_of_super") and 
+        data.get("current_fund")):
+    
+        # Get economic assumptions
+        wage_growth = economic_assumptions["WAGE_GROWTH"]
+        employer_rate = economic_assumptions["EMPLOYER_CONTRIBUTION_RATE"]
+        investment_return = economic_assumptions["INVESTMENT_RETURN"]
+        inflation_rate = economic_assumptions["INFLATION_RATE"]
+        
+        # Get fund data
+        df = pd.read_csv("superfunds.csv")
+        matched_fund = match_fund_name(data["current_fund"], df)
+        if matched_fund:
+            # Get the fund row
+            current_fund_rows = find_applicable_funds(
+                filter_dataframe_by_fund_name(df, matched_fund, exact_match=True),
+                data["current_age"]
+            )
+            if not current_fund_rows.empty:
+                # Calculate projected retirement balance
+                projected_balance = project_super_balance(
+                    int(data["current_age"]),
+                    int(data["retirement_age"]),
+                    float(data["current_balance"]),
+                    float(data["income_net_of_super"]),
+                    wage_growth,
+                    employer_rate,
+                    investment_return,
+                    inflation_rate,
+                    current_fund_rows.iloc[0]
+                )
+                data["retirement_balance"] = projected_balance
+            else:
+                # Simple fallback if fund row not found
+                net_annual_return = investment_return - inflation_rate
+                annual_growth_factor = 1 + (net_annual_return / 100)
+                retirement_growth_years = data["retirement_age"] - data["current_age"]
+                data["retirement_balance"] = data["current_balance"] * (annual_growth_factor ** retirement_growth_years)
+        else:
+            # Simple fallback if fund not matched
+            net_annual_return = investment_return - inflation_rate
+            annual_growth_factor = 1 + (net_annual_return / 100)
+            retirement_growth_years = data["retirement_age"] - data["current_age"]
+            data["retirement_balance"] = data["current_balance"] * (annual_growth_factor ** retirement_growth_years)
+    
+    # Calculate retirement_drawdown_age if prerequisites are met  
+    if (data.get("retirement_balance") and data.get("retirement_age") and 
+        (data.get("retirement_income_option") or data.get("retirement_income"))):
+    
+        # Get retirement standards and economic assumptions
+        from backend.utils import get_asfa_standards, calculate_retirement_drawdown
+        asfa_standards = get_asfa_standards()
+        retirement_investment_return = economic_assumptions["RETIREMENT_INVESTMENT_RETURN"]
+        inflation_rate = economic_assumptions["INFLATION_RATE"]
+        
+        # Determine annual income based on retirement_income_option
+        annual_retirement_income = 0
+        retirement_income_option = data.get("retirement_income_option")
+        
+        if retirement_income_option == "same_as_current" and data.get("after_tax_income"):
+            annual_retirement_income = data["after_tax_income"]
+        elif retirement_income_option in ["modest_single", "modest_couple", "comfortable_single", "comfortable_couple"]:
+            annual_retirement_income = asfa_standards[retirement_income_option]["annual_amount"]
+        elif data.get("retirement_income") and data["retirement_income"] > 0:
+            annual_retirement_income = data["retirement_income"]
+        
+        # Only calculate if we have a valid income amount
+        if annual_retirement_income > 0:
+            depletion_age = calculate_retirement_drawdown(
+                float(data["retirement_balance"]),
+                int(data["retirement_age"]),
+                float(annual_retirement_income),
+                retirement_investment_return,
+                inflation_rate
+            )
+            data["retirement_drawdown_age"] = depletion_age
+    
+    # Update the state with calculated values
+    state["data"] = data
+    return state
