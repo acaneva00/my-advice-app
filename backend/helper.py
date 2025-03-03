@@ -62,6 +62,32 @@ def get_unified_variable_response(var_key: str, raw_value, context: dict, missin
     
     print(f"DEBUG get_unified_variable_response: Processing var_key={var_key}, previous_var={previous_var}")
     
+    # Special handling for retirement income option
+    if var_key == "retirement_income_option":
+        from backend.main import get_retirement_income_options_prompt
+        from backend.cashflow import calculate_after_tax_income
+        
+        # Get the retirement balance either from calculated value or current balance
+        retirement_balance = context.get("retirement_balance", 0)
+        if retirement_balance == 0 and context.get("current_balance"):
+            retirement_balance = context.get("current_balance", 0)
+            # If we have age data, do a simple projection
+            if context.get("current_age") and context.get("retirement_age"):
+                retirement_growth_years = context.get("retirement_age") - context.get("current_age")
+                retirement_balance = retirement_balance * (1.055 ** retirement_growth_years)  # Simple estimate
+        
+        # Calculate after-tax income safely handling None values
+        current_income = context.get("current_income")
+        retirement_age = context.get("retirement_age", 65)
+        
+        # Safe handling of potential None values
+        if current_income is not None and current_income > 0 and retirement_age is not None:
+            after_tax_income = calculate_after_tax_income(current_income, retirement_age)
+        else:
+            after_tax_income = 0
+        
+        return get_retirement_income_options_prompt(retirement_balance, after_tax_income)
+
     # Define intent acknowledgments
     intent_messages = {
         "project_balance": "Happy to help you figure out how much super you'll have at retirement.",
@@ -69,7 +95,7 @@ def get_unified_variable_response(var_key: str, raw_value, context: dict, missin
         "compare_fees_all": "I'll analyze how your fund's fees compare to others.",
         "find_cheapest": "I'll help you find the super fund with the lowest fees.",
         "compare_balance_projection": "I'll compare the projected retirement balances between two funds.",
-        "retirement_income": "I'll help you understand your retirement income options.",
+        "retirement_outcome": "I'll help you understand how long your retirement savings might last.",
         "unknown": "I'll help you with your super query."
     }
     
@@ -118,7 +144,10 @@ def get_variable_description(var_key: str) -> str:
         "retirement_age": "desired retirement age",
         "nominated_fund": "nominated fund",
         "super_included": "whether the income provided includes super contributions or if they are paid on top",
-        "income_net_of_super": "income excluding super contributions"
+        "income_net_of_super": "income excluding super contributions",
+        "retirement_balance": "expected balance at retirement",
+        "retirement_income_option": "preferred income option in retirement",
+        "retirement_income": "desired annual income in retirement"
     }
     return descriptions.get(var_key, var_key)
 
@@ -126,7 +155,7 @@ def extract_intent_variables(user_query: str, previous_system_response: str = ""
     """
     Uses the LLM to extract key variables from a user query and the most recent system response.
     Expected output is a JSON object with the following keys:
-      - intent: one of "compare_fees_nominated", "compare_fees_all", "find_cheapest", "project_balance", "compare_balance_projection", "retirement_income", or "unknown"
+      - intent: one of "compare_fees_nominated", "compare_fees_all", "find_cheapest", "project_balance", "compare_balance_projection", "retirement_outcome", or "unknown"
       - current_fund: the name of the user's current super fund (if mentioned)
       - nominated_fund: the name of the fund the user wishes to compare against (if mentioned)
       - current_age: the user's age as an integer
@@ -142,10 +171,10 @@ def extract_intent_variables(user_query: str, previous_system_response: str = ""
     """
     try:
         system_prompt = (
-            "You are an expert intent extractor for superannuation fee queries. "
+            "You are an expert intent extractor for queries regarding financial calculations and product comparisons in the Australian market. "
             "Given the user's query and the most recent system response (if any), extract the following variables and output them as a valid JSON object with no extra commentary:\n\n"
             "Required keys:\n"
-            " - intent: one of \"compare_fees_nominated\", \"compare_fees_all\", \"find_cheapest\", \"project_balance\", \"compare_balance_projection\", \"retirement_income\", or \"unknown\"\n"
+            " - intent: one of \"compare_fees_nominated\", \"compare_fees_all\", \"find_cheapest\", \"project_balance\", \"compare_balance_projection\", \"retirement_outcome\", or \"unknown\"\n"
             " - current_fund: the name of the user's current super fund, if mentioned\n"
             " - nominated_fund: the name of the fund the user wishes to compare against, if mentioned by the user or in the previous system response\n"
             " - current_age: the user's age as an integer\n"
@@ -153,15 +182,18 @@ def extract_intent_variables(user_query: str, previous_system_response: str = ""
             " - current_income: the user's annual income (in dollars) as a number. Look for patterns like '$X income', 'income of $X', 'earning $X', etc.\n"
             " - retirement_age: the user's retirement age as an integer. Look for patterns like 'retiring at X', 'retirement age X', etc.\n"
             " - super_included: IMPORTANT - ONLY set this to true or false if the user EXPLICITLY states whether their income includes super or not. If not explicitly stated, do not update this variable.\n"
-            " - income_net_of_super: the income excluding superannuation contributions\n\n"
-            "For numeric values:\n"
-            "- Convert k/K to thousands (e.g., 150k = 150000)\n"
+            " - income_net_of_super: the income excluding superannuation contributions\n"
+            " - retirement_balance: their balance at retirement, if mentioned\n"
+            " - retirement_income_option: one of \"same_as_current\", \"modest_single\", \"modest_couple\", \"comfortable_single\", \"comfortable_couple\", or \"custom\" if mentioned\n"
+            " - retirement_income: a custom retirement income amount if specified\n\n"
+            "For numeric values:\n"            "- Convert k/K to thousands (e.g., 150k = 150000)\n"
             "- Convert m/M to millions (e.g., 1.5m = 1500000)\n"
             "- Remove dollar signs and commas\n\n"
             "Important instructions for resolving references:\n"
             "- If the user query contains references like 'this fund', 'that fund', or similar, look for fund names in the previous system response\n"
             "- If user mentions their fund (e.g., 'my fund', 'my super', 'my account', 'I am with') as one fund and references another fund from the previous response, properly assign current_fund and nominated_fund\n"
             "- If the user is comparing a fund mentioned in the previous response with their fund, extract both fund names correctly, properly assign current_fund and nominated_fund\n\n"
+            "- If the user is responding to a question about retirement income options (modest_single, modest_couple, etc.) or selecting 'same_as_current', keep the intent as 'retirement_outcome'."
             "Return a valid JSON object."
         )
         

@@ -4,6 +4,7 @@ from backend.helper import ask_llm, get_unified_variable_response
 from backend.utils import match_fund_name
 from backend.cashflow import calculate_income_net_of_super, calculate_after_tax_income
 import json
+import re
 
 def extract_variable_from_response(last_prompt: str, user_message: str, context: dict, missing_var: str) -> dict:
     """
@@ -122,6 +123,33 @@ def extract_variable_from_response(last_prompt: str, user_message: str, context:
                     data['value'] = interpretation.lower().strip() == "included"
             elif isinstance(raw_value, bool):
                 data['value'] = raw_value
+
+        # Handle retirement income option
+        if expected_var == "retirement_income_option":
+            if isinstance(raw_value, str):
+                raw_value = raw_value.lower().strip()
+                if any(x in raw_value for x in ["same", "current", "as now", "as my current"]):
+                    data['value'] = "same_as_current"
+                elif "modest single" in raw_value or "option 2" in raw_value or "option2" in raw_value or raw_value == "2":
+                    data['value'] = "modest_single"
+                elif "modest couple" in raw_value or "option 3" in raw_value or "option3" in raw_value or raw_value == "3":
+                    data['value'] = "modest_couple"
+                elif "comfortable single" in raw_value or "option 4" in raw_value or "option4" in raw_value or raw_value == "4":
+                    data['value'] = "comfortable_single"
+                elif "comfortable couple" in raw_value or "option 5" in raw_value or "option5" in raw_value or raw_value == "5":
+                    data['value'] = "comfortable_couple"
+                elif any(x in raw_value for x in ["custom", "my own", "specific", "option 6", "option6"]) or raw_value == "6":
+                    data['value'] = "custom"
+                    # Try to extract a custom amount if provided
+                    amount_match = re.search(r'(\d[\d,.]*k?m?)', raw_value)
+                    if amount_match:
+                        custom_amount = parse_numeric_with_suffix(amount_match.group(1))
+                        context['retirement_income'] = custom_amount
+                else:
+                    # Try to use LLM to interpret ambiguous responses
+                    interpret_prompt = f"Which retirement income option does this response most closely match: 'same_as_current', 'modest_single', 'modest_couple', 'comfortable_single', 'comfortable_couple', or 'custom'? Response: '{raw_value}'"
+                    interpretation = ask_llm("You are an option interpreter. Answer with ONLY one of these options: 'same_as_current', 'modest_single', 'modest_couple', 'comfortable_single', 'comfortable_couple', or 'custom'.", interpret_prompt)
+                    data['value'] = interpretation.lower().strip()
 
         return data
     except json.JSONDecodeError as e:

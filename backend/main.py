@@ -17,7 +17,9 @@ from backend.utils import (
     find_cheapest_superfund,
     project_super_balance,
     match_fund_name,
-    filter_dataframe_by_fund_name
+    filter_dataframe_by_fund_name,
+    calculate_retirement_drawdown, 
+    get_asfa_standards 
 )
 from backend.helper import extract_intent_variables, get_unified_variable_response, ask_llm
 
@@ -389,7 +391,7 @@ def process_project_balance(context: dict) -> str:
     income_net_of_super = calculate_income_net_of_super(current_income, super_included, employer_contribution_rate)
     print(f"DEBUG main.py: Calculated income_net_of_super: {income_net_of_super}, using super_included={super_included}")
 
-    projected_balance = project_super_balance(
+    projected_balance = 0(
         int(user_age), 
         int(retirement_age), 
         float(user_balance), 
@@ -543,6 +545,200 @@ def process_compare_balance_projection(context: dict) -> str:
     
     return ask_llm(system_prompt, user_prompt)
 
+def process_retirement_outcome(context: dict) -> str:
+    """Process retirement_outcome intent with the given context."""
+    print("DEBUG: Entering process_retirement_outcome function")
+    user_age = context["current_age"]
+    retirement_age = context["retirement_age"]
+    retirement_balance = context.get("retirement_balance")
+    
+    # Fix the retirement_income_option handling
+    retirement_income_option = context.get("retirement_income_option")
+    print(f"DEBUG process_retirement_outcome: retirement_income_option type = {type(retirement_income_option)}, value = '{retirement_income_option}'")
+    
+    # Check if retirement_income_option is the string 'None'
+    if retirement_income_option == 'None':
+        # Try to get it from context.get('data') or other places
+        print("DEBUG process_retirement_outcome: Got string 'None', checking state data")
+        if 'data' in context and context['data'] and context['data'].get('retirement_income_option'):
+            retirement_income_option = context['data'].get('retirement_income_option')
+        # If that doesn't work, check if it's in the context dict directly
+        elif 'retirement_income_option' in context:
+            retirement_income_option = context['retirement_income_option']
+    
+    # Another fallback: assume same_as_current if option is missing but we have income
+    if (retirement_income_option is None or retirement_income_option == 'None') and context.get('current_income', 0) > 0:
+        print("DEBUG process_retirement_outcome: Assuming same_as_current as fallback")
+        retirement_income_option = 'same_as_current'
+    
+    print(f"DEBUG process_retirement_outcome: Final retirement_income_option = '{retirement_income_option}'")
+    
+    retirement_income = context.get("retirement_income")
+    current_income = context.get("current_income", 0)
+    
+    print(f"DEBUG process_retirement_outcome: retirement_income_option = '{retirement_income_option}'")
+    print(f"DEBUG process_retirement_outcome: current_income = {current_income}")
+    print(f"DEBUG process_retirement_outcome: retirement_income = {retirement_income}")
+
+    # If no retirement balance, use project_balance function to get it
+    if not retirement_balance:
+        # We need to call project_balance logic to get retirement balance
+        current_fund = context["current_fund"]
+        user_balance = context["current_balance"]
+        super_included = context.get("super_included", False)
+        
+        # First use LLM to match the fund name
+        matched_fund = match_fund_name(current_fund, df)
+        if matched_fund is None:
+            return f"Could not find applicable fee data for your current fund: {current_fund}."
+            
+        # Now get the row for the matched fund
+        current_fund_rows = find_applicable_funds(
+            filter_dataframe_by_fund_name(df, matched_fund, exact_match=True),
+            user_age
+        )
+        if current_fund_rows.empty:
+            return f"Could not find applicable fee data for your current fund: {current_fund}."
+        current_fund_row = current_fund_rows.iloc[0]
+        
+        # Use centralized assumptions
+        wage_growth = economic_assumptions["WAGE_GROWTH"]
+        employer_contribution_rate = economic_assumptions["EMPLOYER_CONTRIBUTION_RATE"]
+        investment_return = economic_assumptions["INVESTMENT_RETURN"]
+        inflation_rate = economic_assumptions["INFLATION_RATE"]
+        
+        # Calculate income net of super
+        income_net_of_super = calculate_income_net_of_super(current_income, super_included, employer_contribution_rate)
+        
+        # Calculate retirement balance
+        retirement_balance = project_super_balance(
+            int(user_age), 
+            int(retirement_age), 
+            float(user_balance), 
+            float(income_net_of_super),
+            wage_growth, 
+            employer_contribution_rate, 
+            investment_return, 
+            inflation_rate,
+            current_fund_row
+        )
+    
+    # Calculate annual income based on retirement_income_option
+    annual_retirement_income = 0
+    if retirement_income_option == "same_as_current":
+        print("DEBUG process_retirement_outcome: Using same_as_current option")
+        # Calculate after-tax income using the existing function
+        annual_retirement_income = calculate_after_tax_income(current_income, retirement_age)
+        print(f"DEBUG process_retirement_outcome: Calculated after-tax income: {annual_retirement_income}")
+    elif retirement_income_option in ["modest_single", "modest_couple", "comfortable_single", "comfortable_couple"]:
+        print(f"DEBUG process_retirement_outcome: Using ASFA standard: {retirement_income_option}")
+        # Use ASFA standards
+        asfa_standards = get_asfa_standards()
+        annual_retirement_income = asfa_standards[retirement_income_option]["annual_amount"]
+        print(f"DEBUG process_retirement_outcome: ASFA standard amount: {annual_retirement_income}")
+    elif retirement_income and retirement_income > 0:
+        print(f"DEBUG process_retirement_outcome: Using custom amount: {retirement_income}")
+        # Use custom amount
+        annual_retirement_income = retirement_income
+    else:
+        print("DEBUG process_retirement_outcome: No valid income option found, returning error")
+        # Fallback to a default if somehow we don't have a valid income
+        return "Could not determine your desired retirement income. Please specify an income option."
+    
+    # Use more conservative retirement investment return
+    retirement_investment_return = economic_assumptions["RETIREMENT_INVESTMENT_RETURN"]
+    inflation_rate = economic_assumptions["INFLATION_RATE"]
+    
+    # Calculate when funds will be depleted
+    depletion_age = calculate_retirement_drawdown(
+        float(retirement_balance),
+        int(retirement_age),
+        float(annual_retirement_income),
+        retirement_investment_return,
+        inflation_rate
+    )
+    
+    # Format the retirement income option for display
+    if retirement_income_option == "same_as_current":
+        income_description = f"Same as your current after-tax income (${annual_retirement_income:,.0f} per year)"
+    elif retirement_income_option in ["modest_single", "modest_couple", "comfortable_single", "comfortable_couple"]:
+        asfa_standards = get_asfa_standards()
+        standard_name = retirement_income_option.replace('_', ' ').title()
+        income_description = f"ASFA {standard_name} Standard (${annual_retirement_income:,.0f} per year)"
+    else:
+        income_description = f"Custom amount of ${annual_retirement_income:,.0f} per year"
+    
+    # Special handling for the case where funds won't be depleted
+    if depletion_age >= 200:
+        depletion_message = "Your retirement savings are projected to last your lifetime."
+    else:
+        years_in_retirement = depletion_age - retirement_age
+        depletion_message = f"Your retirement savings are projected to last until age {depletion_age}, which is {years_in_retirement} years after retirement."
+    
+    user_prompt = (
+        f"Data:\n"
+        f"Current age: {user_age}\n"
+        f"Retirement age: {retirement_age}\n"
+        f"Retirement balance: ${retirement_balance:,.0f}\n"
+        f"Annual retirement income: {income_description}\n"
+        f"Retirement investment return: {retirement_investment_return}%\n"
+        f"Inflation rate: {inflation_rate}%\n"
+        f"Depletion age: {depletion_age}\n"
+    )
+    
+    system_prompt = (
+        "You are a financial guru specializing in retirement planning. "
+        "Based solely on the data provided, produce a response that follows this format:\n\n"
+        "First paragraph: Confirm their retirement balance and annual income in retirement.\n\n"
+        "Second paragraph: State how long their retirement savings are projected to last, "
+        "emphasizing that this is based on the assumptions provided and actual results may vary.\n\n"
+        "Third paragraph: Provide a brief explanation of key factors that could affect this projection, "
+        "such as investment returns, inflation, unexpected expenses, or changes in retirement income needs.\n\n"
+        "Keep your response informative but conversational, and under 200 words."
+    )
+    
+    return ask_llm(system_prompt, user_prompt)
+
+def get_retirement_income_options_prompt(retirement_balance: float, after_tax_income: float) -> str:
+    """Generate a prompt explaining retirement income options"""
+    asfa_standards = get_asfa_standards()
+
+    # Ensure we have non-negative values
+    retirement_balance = max(0, retirement_balance)
+    after_tax_income = max(0, after_tax_income)
+    
+    # Format values for display
+    formatted_balance = f"${retirement_balance:,.0f}"
+    formatted_income = f"${after_tax_income:,.0f}"
+    
+    system_prompt = (
+        "You are a friendly financial expert helping someone understand their retirement income options. "
+        "Create a clear, conversational explanation that presents these options in a way that's easy to understand. "
+        "Format the options as a numbered list, and explain that they can reply with their preference. "
+        "Keep your tone warm and supportive, but make your explanation concise and to the point."
+        "Avoid letter formats like 'Dear User' or "
+        "'Best wishes'. Speak directly to the person in a conversational way."
+    )
+    
+    # Format values for display
+    formatted_balance = f"${retirement_balance:,.0f}"
+    formatted_income = f"${after_tax_income:,.0f}"
+    
+    user_prompt = (
+        f"Please explain these retirement income options to the user with this specific introduction:\n\n"
+        f"Your estimated balance at retirement is {formatted_balance}. To calculate how long this might last in providing you with an income, we need to know what income you would like to withdraw.\n\n"
+        f"1. Same as current income after tax: Your current after-tax income is {formatted_income}. This is a good option if you're comfortable with your current lifestyle and want to maintain it during retirement.\n\n"
+        f"2. ASFA Modest Single Standard: $32,000 per year - Basic activities and limited leisure\n\n"
+        f"3. ASFA Modest Couple Standard: $46,000 per year - Basic needs and limited leisure for couples\n\n"
+        f"4. ASFA Comfortable Single Standard: $52,000 per year - Good standard of living with private health insurance\n\n"
+        f"5. ASFA Comfortable Couple Standard: $75,000 per year - Good standard of living for couples\n\n"
+        f"6. Custom amount\n\n"
+        f"The user should be able to reply with either the number or the name of their preferred option."
+        f"Keep your response conversational and concise, avoiding formal letter formats."
+    )
+    
+    return ask_llm(system_prompt, user_prompt)
+
 def process_default_comparison(context: dict) -> str:
     """Process default comparison when no specific intent is matched."""
     user_age = context["current_age"]
@@ -605,6 +801,8 @@ def process_intent(intent: str, context: dict) -> str:
             response = process_project_balance(context)
         elif intent == "compare_balance_projection":
             response = process_compare_balance_projection(context)
+        elif intent == "retirement_outcome":
+            response = process_retirement_outcome(context)
         else:
             response = process_default_comparison(context)
         
@@ -785,14 +983,17 @@ def process_query(user_query: str, previous_system_response: str = "", full_hist
         "current_balance": state["data"].get("current_balance", 0) or None,
         "current_income": state["data"].get("current_income", 0) or None,
         "retirement_age": state["data"].get("retirement_age", 0) or None,
-        "current_fund": state["data"].get("current_fund"),  # Fixed this line
-        "nominated_fund": state["data"].get("nominated_fund"),  # And this line
-        "super_included": state["data"].get("super_included"),  # Add this line
+        "current_fund": state["data"].get("current_fund"), 
+        "nominated_fund": state["data"].get("nominated_fund"), 
+        "super_included": state["data"].get("super_included"), 
+        "retirement_income_option": state.get("data", {}).get("retirement_income_option", None),
         "intent": intent,
         "is_new_intent": is_new_intent,
         "previous_var": state["data"].get("last_var")
     }
     
+    print(f"DEBUG main.py: retirement_income_option in state: {state['data'].get('retirement_income_option')}")
+    print(f"DEBUG main.py: retirement_income_option in context: {context.get('retirement_income_option')}")
     print("DEBUG main.py: State data before context creation:", state["data"])
     print("DEBUG main.py: Created context:", context)
 
@@ -869,6 +1070,25 @@ def process_query(user_query: str, previous_system_response: str = "", full_hist
         if state["data"].get("current_income", 0) > 0 and state["data"].get("super_included") is None:
             missing_vars.append("super_included")
             print("DEBUG main.py: Missing variable: super_included")
+    
+    # For retirement_outcome
+    if intent == "retirement_outcome":
+        if not state["data"].get("current_age"):
+            missing_vars.append("age")
+        if not state["data"].get("retirement_age") or state["data"].get("retirement_age") <= state["data"].get("current_age", 0):
+            missing_vars.append("desired retirement age")
+        # Only need retirement balance OR (current balance + current fund + current income)
+        if not state["data"].get("retirement_balance"):
+            if not state["data"].get("current_balance"):
+                missing_vars.append("super balance")
+            if not state["data"].get("current_fund"):
+                missing_vars.append("current fund")
+            if not state["data"].get("current_income"):
+                missing_vars.append("current income")
+            if state["data"].get("current_income", 0) > 0 and state["data"].get("super_included") is None:
+                missing_vars.append("super_included")
+        if not state["data"].get("retirement_income_option") and not state["data"].get("retirement_income", 0) > 0:
+            missing_vars.append("retirement_income_option")
 
     
     # If any variables are missing, generate a structured prompt using the LLM

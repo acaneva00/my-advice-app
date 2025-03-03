@@ -322,3 +322,85 @@ def project_super_balance(current_age: int, retirement_age: int, current_balance
         print("--------------------------------------------------")
     
     return balance
+
+def calculate_retirement_drawdown(retirement_balance: float, retirement_age: int, annual_income: float, 
+                                 investment_return: float, inflation_rate: float) -> int:
+    """
+    Calculate when retirement savings will be depleted, given a retirement balance,
+    annual income drawdown, and investment returns.
+    
+    Args:
+        retirement_balance: Balance at retirement
+        retirement_age: Age at retirement
+        annual_income: Annual income desired in retirement
+        investment_return: Expected annual investment return (percentage)
+        inflation_rate: Expected annual inflation rate (percentage)
+        
+    Returns:
+        Age at which retirement savings will be depleted
+    """
+    # Convert annual rates to monthly
+    net_annual_return = investment_return - inflation_rate
+    net_monthly_return = (1 + net_annual_return / 100) ** (1/12) - 1
+    monthly_income = annual_income / 12
+    
+    balance = retirement_balance
+    current_age = retirement_age
+    months = 0
+    
+    print(f"Initial values for drawdown calculation:")
+    print(f"  Starting balance: ${balance:,.2f}")
+    print(f"  Monthly income: ${monthly_income:,.2f}")
+    print(f"  Net annual return: {net_annual_return:.2f}%")
+    print(f"  Net monthly return: {net_monthly_return*100:.4f}%")
+    print("--------------------------------------------------")
+    
+    while balance > 0 and months < 1200:  # Cap at 100 years (1200 months) to prevent infinite loops
+        # Each month, add investment returns and subtract income
+        investment_growth = balance * net_monthly_return
+        balance = balance + investment_growth - monthly_income
+        
+        months += 1
+        
+        if months % 12 == 0:  # Log every year
+            years = months // 12
+            current_age = retirement_age + years
+            print(f"After {years} years (age {current_age}):")
+            print(f"  Remaining balance: ${balance:,.2f}")
+            print("--------------------------------------------------")
+        
+        if balance <= 0:
+            break
+    
+    # Calculate final age (whole years)
+    depletion_age = retirement_age + (months // 12)
+    
+    # If we hit our cap, return a special value
+    if months >= 1200:
+        return 200  # Special value indicating funds won't run out in a normal lifetime
+    
+    return depletion_age
+
+def get_asfa_standards() -> dict:
+    """
+    Returns the ASFA Retirement Standards with descriptions.
+    These are the current standards as of March 2025.
+    """
+    return {
+        "modest_single": {
+            "annual_amount": 32000,
+            "description": "Basic activities and limited leisure, simple housing and healthcare"
+        },
+        "modest_couple": {
+            "annual_amount": 46000,
+            "description": "Basic needs and limited leisure for couples, simple housing and healthcare"
+        },
+        "comfortable_single": {
+            "annual_amount": 52000,
+            "description": "Good standard of living with private health insurance, leisure activities, and newer cars"
+        },
+        "comfortable_couple": {
+            "annual_amount": 75000,
+            "description": "Good standard of living for couples with private health insurance, more leisure activities, and newer cars"
+        }
+    }
