@@ -136,7 +136,17 @@ def extract_variable_from_response(last_prompt: str, user_message: str, context:
         if expected_var == "retirement_income_option":
             if isinstance(raw_value, str):
                 raw_value = raw_value.lower().strip()
-                if any(x in raw_value for x in ["same", "current", "as now", "as my current"]):
+                # Check for numeric values like "$90k" directly in the response
+                if "$" in raw_value or re.search(r'\d+k?', raw_value):
+                    data['value'] = "custom"
+                    amount_match = re.search(r'(\d[\d,.]*k?m?)', raw_value)
+                    if amount_match:
+                        from backend.main import parse_numeric_with_suffix
+                        custom_amount = parse_numeric_with_suffix(amount_match.group(1))
+                        print(f"DEBUG extract_variable_from_response: Extracted custom amount: {custom_amount}")
+                        # Return both the option and the amount
+                        return {'variable': expected_var, 'value': "custom", 'retirement_income': custom_amount}
+                elif any(x in raw_value for x in ["same", "current", "as now", "as my current"]):
                     data['value'] = "same_as_current"
                 elif "modest single" in raw_value or "option 2" in raw_value or "option2" in raw_value or raw_value == "2":
                     data['value'] = "modest_single"
@@ -149,10 +159,12 @@ def extract_variable_from_response(last_prompt: str, user_message: str, context:
                 elif any(x in raw_value for x in ["custom", "my own", "specific", "option 6", "option6"]) or raw_value == "6":
                     data['value'] = "custom"
                     # Try to extract a custom amount if provided
-                    amount_match = re.search(r'(\d[\d,.]*k?m?)', raw_value)
+                    amount_match = re.search(r'(\d[\d,.]*k?m?)', user_message)
                     if amount_match:
+                        from backend.main import parse_numeric_with_suffix
                         custom_amount = parse_numeric_with_suffix(amount_match.group(1))
-                        context['retirement_income'] = custom_amount
+                        print(f"DEBUG extract_variable_from_response: Extracted custom amount: {custom_amount}")
+                        return {'variable': expected_var, 'value': "custom", 'retirement_income': custom_amount}
                 else:
                     # Try to use LLM to interpret ambiguous responses
                     interpret_prompt = f"Which retirement income option does this response most closely match: 'same_as_current', 'modest_single', 'modest_couple', 'comfortable_single', 'comfortable_couple', or 'custom'? Response: '{raw_value}'"
@@ -245,6 +257,11 @@ def chat_fn(user_message, history, state):
             # Update state with the raw value
             state["data"][var_key] = raw_value
             print(f"DEBUG app.py: Updated state with {var_key}: {raw_value}")
+
+            # If we also extracted a retirement income amount, save that too
+            if extraction.get("retirement_income") is not None:
+                state["data"]["retirement_income"] = extraction["retirement_income"]
+                print(f"DEBUG app.py: Also updated state with retirement_income: {extraction['retirement_income']}")
 
             # Update calculated values based on available data
             state = update_calculated_values(state)

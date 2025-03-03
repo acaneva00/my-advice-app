@@ -636,6 +636,20 @@ def process_retirement_outcome(context: dict) -> str:
         asfa_standards = get_asfa_standards()
         annual_retirement_income = asfa_standards[retirement_income_option]["annual_amount"]
         print(f"DEBUG process_retirement_outcome: ASFA standard amount: {annual_retirement_income}")
+    elif retirement_income_option == "custom":
+        print(f"DEBUG process_retirement_outcome: Using custom amount: {context.get('retirement_income')}")
+        if context.get("retirement_income") and context.get("retirement_income") > 0:
+            annual_retirement_income = context.get("retirement_income")
+        elif "data" in context and context.get("data", {}).get("retirement_income", 0) > 0:
+            annual_retirement_income = context["data"]["retirement_income"]
+        else:
+            # Extract the custom amount from the user_message if present
+            amount_match = re.search(r'(\d[\d,.]*k?m?)', user_message) if "user_message" in context else None
+            if amount_match:
+                from backend.main import parse_numeric_with_suffix
+                annual_retirement_income = parse_numeric_with_suffix(amount_match.group(1))
+            else:
+                return "Could not determine your desired retirement income. Please specify a custom amount."
     elif retirement_income and retirement_income > 0:
         print(f"DEBUG process_retirement_outcome: Using custom amount: {retirement_income}")
         # Use custom amount
@@ -969,6 +983,11 @@ def process_query(user_query: str, previous_system_response: str = "", full_hist
                 state["data"]["super_included"] = extracted["super_included"]
                 print(f"DEBUG main.py: Updated super_included to {extracted['super_included']}")
 
+            # Add the new code here to capture retirement income
+            if "retirement_income" in extracted and extracted["retirement_income"] is not None:
+                state["data"]["retirement_income"] = extracted["retirement_income"]
+                print(f"DEBUG main.py: Updated retirement_income to {extracted['retirement_income']}")
+            
             # For numeric values, only update if we don't already have values from the variable collection process
             if not any(state["data"].get(key) for key in ["current_age", "current_balance", "current_income", "retirement_age"]):
                 for key in ["current_age", "current_balance", "current_income", "retirement_age"]:
