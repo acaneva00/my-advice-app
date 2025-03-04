@@ -1,0 +1,28 @@
+{
+  "name": "my-advice-app",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "type": "module",
+  "scripts": {
+    "setup": "node scripts/migrate.js --setup",
+    "create-samples": "node scripts/migrate.js --create-samples",
+    "migrate": "node scripts/migrate.js"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/acaneva00/my-advice-app.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/acaneva00/my-advice-app/issues"
+  },
+  "homepage": "https://github.com/acaneva00/my-advice-app#readme",
+  "dependencies": {
+    "@supabase/supabase-js": "^2.49.1",
+    "dotenv": "^16.4.7",
+    "fs-extra": "^11.3.0"
+  }
+}
