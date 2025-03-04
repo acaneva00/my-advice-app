@@ -1097,7 +1097,7 @@ def process_query(user_query: str, previous_system_response: str = "", full_hist
         "previous_intent": state["data"].get("previous_intent"),
         "original_intent": state["data"].get("original_intent"),  
         "is_new_intent": is_new_intent,
-         "previous_var": state["data"].get("last_var"),
+        "previous_var": state["data"].get("last_var"),
         "user_query": user_query 
 }
     
