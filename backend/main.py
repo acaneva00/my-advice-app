@@ -644,7 +644,11 @@ def process_retirement_outcome(context: dict) -> str:
             annual_retirement_income = context["data"]["retirement_income"]
         else:
             # Extract the custom amount from the user_message if present
-            amount_match = re.search(r'(\d[\d,.]*k?m?)', user_message) if "user_message" in context else None
+            amount_match = None
+            if "user_message" in context:
+                amount_match = re.search(r'(\d[\d,.]*k?m?)', context["user_message"])
+            elif "data" in context and "last_clarification_prompt" in context["data"]:
+                amount_match = re.search(r'(\d[\d,.]*k?m?)', context["data"]["last_clarification_prompt"])
             if amount_match:
                 from backend.main import parse_numeric_with_suffix
                 annual_retirement_income = parse_numeric_with_suffix(amount_match.group(1))
@@ -749,6 +753,59 @@ def get_retirement_income_options_prompt(retirement_balance: float, after_tax_in
     
     return ask_llm(system_prompt, user_prompt)
 
+def process_update_variable(context: dict) -> str:
+    """Process update_variable intent by re-running the previous intent with updated values."""
+    print(f"DEBUG process_update_variable: Received context: {context}")
+    
+    # Get the original intent to determine which process to run
+    original_intent = context.get("original_intent")
+    
+    # If no original_intent, fall back to previous_intent
+    if not original_intent:
+        original_intent = context.get("previous_intent")
+    
+    # If still no valid intent, we can't proceed
+    if not original_intent or original_intent == "unknown" or original_intent == "update_variable":
+        return "I'm not sure which calculation you'd like to update. Could you please provide a complete query?"
+    
+    # Create a new context that combines the current updates with the preserved values
+    updated_context = context.copy()
+    
+    # Get all fields from previous data except those that have been intentionally updated
+    if context.get('previous_data'):
+        for key, value in context['previous_data'].items():
+            # For numeric fields, only copy if the current value is None or 0
+            if isinstance(value, (int, float)) and (updated_context.get(key) is None or updated_context.get(key) == 0):
+                updated_context[key] = value
+            # For string fields, only copy if the current value is None or empty
+            elif isinstance(value, str) and not updated_context.get(key):
+                updated_context[key] = value
+            # For other types (including None), only copy if not present in updated_context
+            elif key not in updated_context:
+                updated_context[key] = value
+    
+    # Set the intent to the original intent to re-run that calculation
+    updated_context['intent'] = original_intent
+    
+    print(f"DEBUG process_update_variable: Original intent found: {original_intent}")
+    print(f"DEBUG process_update_variable: Updated context: {updated_context}")
+    
+    # Run the appropriate process function with the updated context
+    if original_intent == "project_balance":
+        return process_project_balance(updated_context)
+    elif original_intent == "compare_fees_nominated":
+        return process_compare_fees_nominated(updated_context)
+    elif original_intent == "compare_fees_all":
+        return process_compare_fees_all(updated_context)
+    elif original_intent == "find_cheapest":
+        return process_find_cheapest(updated_context)
+    elif original_intent == "compare_balance_projection":
+        return process_compare_balance_projection(updated_context)
+    elif original_intent == "retirement_outcome":
+        return process_retirement_outcome(updated_context)
+    else:
+        return "I'm not sure which calculation you'd like to update. Could you please provide a complete query?"
+
 def process_default_comparison(context: dict) -> str:
     """Process default comparison when no specific intent is matched."""
     user_age = context["current_age"]
@@ -813,6 +870,8 @@ def process_intent(intent: str, context: dict) -> str:
             response = process_compare_balance_projection(context)
         elif intent == "retirement_outcome":
             response = process_retirement_outcome(context)
+        elif intent == "update_variable":
+            response = process_update_variable(context)
         else:
             response = process_default_comparison(context)
         
@@ -879,6 +938,11 @@ def process_query(user_query: str, previous_system_response: str = "", full_hist
     print("DEBUG process_query: Final intent:")
     print(intent)
     
+    # Save previous intent in state
+    current_state_intent = state["data"].get("intent") if state and "data" in state else None
+    if current_state_intent and current_state_intent != "unknown" and intent == "update_variable":
+        state["data"]["previous_intent"] = current_state_intent
+
     print(f"DEBUG: LLM-determined intent: {intent}")
 
     # Check if this is a new intent
@@ -889,6 +953,10 @@ def process_query(user_query: str, previous_system_response: str = "", full_hist
     print(current_state_intent)
     print("DEBUG process_query: Is new intent:")
     print(is_new_intent)
+
+    # Save previous intent in state
+    if current_state_intent and current_state_intent != "unknown":
+        state["data"]["previous_intent"] = current_state_intent
 
     # IMPORTANT: Save the intent in state.data immediately
     # This ensures the intent persists throughout variable collection
@@ -914,89 +982,97 @@ def process_query(user_query: str, previous_system_response: str = "", full_hist
         print("DEBUG main.py: Current state before update:", state)
         print("DEBUG main.py: Updating state with new extraction:", extracted)
 
-        # If we're in the middle of collecting variables, only update the specific variable we asked for
-        if state.get("missing_var"):
-            # Map the missing_var to the actual state key
-            var_map = {
-                "age": "current_age",
-                "super balance": "current_balance",
-                "current income": "current_income",
-                "desired retirement age": "retirement_age",
-                "current fund": "current_fund",
-                "nominated fund": "nominated_fund",
-                "super_included": "super_included",
-                "income_net_of_super": "income_net_of_super",
-                "after_tax_income": "after_tax_income",
-                "retirement_balance": "retirement_balance",
-                "retirement_income": "retirement_income",
-                "retirement_drawdown_age": "retirement_drawdown_age"
-            }           
-            var_key = var_map.get(state["missing_var"], state["missing_var"])
-            print(f"DEBUG main.py: Looking for extracted value for {var_key} (mapped from {state['missing_var']})")
-            print(f"DEBUG main.py: Current state values: {state['data']}")
-            
-            # Extract the specific variable value from the user's response
-            response_value = None
-            if "retirement age" in state["missing_var"].lower():
-                match = re.search(r'\d+', user_query)
-                if match:
-                    response_value = int(match.group())
-            elif "income" in state["missing_var"].lower():
-                match = re.search(r'[\d.]+[km]?', user_query)
-                if match:
-                    response_value = parse_numeric_with_suffix(match.group())
-            elif "balance" in state["missing_var"].lower():
-                match = re.search(r'[\d.]+[km]?', user_query)
-                if match:
-                    response_value = parse_numeric_with_suffix(match.group())
-            elif "age" in state["missing_var"].lower():
-                match = re.search(r'\d+', user_query)
-                if match:
-                    response_value = int(match.group())
-            
-            if response_value is not None:
-                print(f"DEBUG main.py: Extracted value {response_value} for {var_key}")
-                state["data"][var_key] = response_value
+        # Special handling for update_variable intent - preserve original values
+        if extracted.get("intent") == "update_variable":
+            # Only update the specific variables that were explicitly mentioned in the user query
+            for key in ["retirement_age", "retirement_income", "current_fund"]:
+                if key in extracted and extracted[key] is not None and extracted[key] != 0:
+                    state["data"][key] = extracted[key]
+                    print(f"DEBUG main.py: For update_variable, updating {key} to {extracted[key]}")
         else:
-            # We're not collecting variables, so process initial extraction
+        # If we're in the middle of collecting variables, only update the specific variable we asked for
+            if state.get("missing_var"):
+                # Map the missing_var to the actual state key
+                var_map = {
+                    "age": "current_age",
+                    "super balance": "current_balance",
+                    "current income": "current_income",
+                    "desired retirement age": "retirement_age",
+                    "current fund": "current_fund",
+                    "nominated fund": "nominated_fund",
+                    "super_included": "super_included",
+                    "income_net_of_super": "income_net_of_super",
+                    "after_tax_income": "after_tax_income",
+                    "retirement_balance": "retirement_balance",
+                    "retirement_income": "retirement_income",
+                    "retirement_drawdown_age": "retirement_drawdown_age"
+                }           
+                var_key = var_map.get(state["missing_var"], state["missing_var"])
+                print(f"DEBUG main.py: Looking for extracted value for {var_key} (mapped from {state['missing_var']})")
+                print(f"DEBUG main.py: Current state values: {state['data']}")
+                
+                # Extract the specific variable value from the user's response
+                response_value = None
+                if "retirement age" in state["missing_var"].lower():
+                    match = re.search(r'\d+', user_query)
+                    if match:
+                        response_value = int(match.group())
+                elif "income" in state["missing_var"].lower():
+                    match = re.search(r'[\d.]+[km]?', user_query)
+                    if match:
+                        response_value = parse_numeric_with_suffix(match.group())
+                elif "balance" in state["missing_var"].lower():
+                    match = re.search(r'[\d.]+[km]?', user_query)
+                    if match:
+                        response_value = parse_numeric_with_suffix(match.group())
+                elif "age" in state["missing_var"].lower():
+                    match = re.search(r'\d+', user_query)
+                    if match:
+                        response_value = int(match.group())
+                
+                if response_value is not None:
+                    print(f"DEBUG main.py: Extracted value {response_value} for {var_key}")
+                    state["data"][var_key] = response_value
+            else:
+                # We're not collecting variables, so process initial extraction
 
-            # Always handle fund names separately (they are strings) regardless of other state variables
-            if extracted.get("current_fund"):
-                temp_fund = extracted["current_fund"]
-                matched_fund = match_fund_name(temp_fund, df)
-                print(f"DEBUG main.py: Processing extracted current_fund: {temp_fund}, matched to: {matched_fund}")
-                if matched_fund:
-                    state["data"]["current_fund"] = matched_fund
-                else:
-                    state["data"]["current_fund"] = temp_fund
-                    
-            if extracted.get("nominated_fund"):
-                temp_fund = extracted["nominated_fund"]
-                matched_fund = match_fund_name(temp_fund, df)
-                print(f"DEBUG main.py: Processing extracted nominated_fund: {temp_fund}, matched to: {matched_fund}")
-                if matched_fund:
-                    state["data"]["nominated_fund"] = matched_fund
-                else:
-                    state["data"]["nominated_fund"] = temp_fund
-            print(f"DEBUG main.py: Before updating super_included, current value: {state['data'].get('super_included')}")
-            if "super_included" in extracted and extracted["super_included"] is not None:
-                state["data"]["super_included"] = extracted["super_included"]
-                print(f"DEBUG main.py: Updated super_included to {extracted['super_included']}")
+                # Always handle fund names separately (they are strings) regardless of other state variables
+                if extracted.get("current_fund"):
+                    temp_fund = extracted["current_fund"]
+                    matched_fund = match_fund_name(temp_fund, df)
+                    print(f"DEBUG main.py: Processing extracted current_fund: {temp_fund}, matched to: {matched_fund}")
+                    if matched_fund:
+                        state["data"]["current_fund"] = matched_fund
+                    else:
+                        state["data"]["current_fund"] = temp_fund
+                        
+                if extracted.get("nominated_fund"):
+                    temp_fund = extracted["nominated_fund"]
+                    matched_fund = match_fund_name(temp_fund, df)
+                    print(f"DEBUG main.py: Processing extracted nominated_fund: {temp_fund}, matched to: {matched_fund}")
+                    if matched_fund:
+                        state["data"]["nominated_fund"] = matched_fund
+                    else:
+                        state["data"]["nominated_fund"] = temp_fund
+                print(f"DEBUG main.py: Before updating super_included, current value: {state['data'].get('super_included')}")
+                if "super_included" in extracted and extracted["super_included"] is not None:
+                    state["data"]["super_included"] = extracted["super_included"]
+                    print(f"DEBUG main.py: Updated super_included to {extracted['super_included']}")
 
-            # Add the new code here to capture retirement income
-            if "retirement_income" in extracted and extracted["retirement_income"] is not None:
-                state["data"]["retirement_income"] = extracted["retirement_income"]
-                print(f"DEBUG main.py: Updated retirement_income to {extracted['retirement_income']}")
-            
-            # For numeric values, only update if we don't already have values from the variable collection process
-            if not any(state["data"].get(key) for key in ["current_age", "current_balance", "current_income", "retirement_age"]):
-                for key in ["current_age", "current_balance", "current_income", "retirement_age"]:
-                    if key in extracted and extracted[key] is not None:
-                        if extracted[key] != state["data"].get(key):  # Only update if value is different
-                            print(f"DEBUG main.py: Updating {key} from {state['data'].get(key)} to {extracted[key]}")
-                            state["data"][key] = extracted[key]
-            
-        print("DEBUG main.py: Updated state after extraction:", state)
+                # Add the new code here to capture retirement income
+                if "retirement_income" in extracted and extracted["retirement_income"] is not None:
+                    state["data"]["retirement_income"] = extracted["retirement_income"]
+                    print(f"DEBUG main.py: Updated retirement_income to {extracted['retirement_income']}")
+                
+                # For numeric values, only update if we don't already have values from the variable collection process
+                if not any(state["data"].get(key) for key in ["current_age", "current_balance", "current_income", "retirement_age"]):
+                    for key in ["current_age", "current_balance", "current_income", "retirement_age"]:
+                        if key in extracted and extracted[key] is not None:
+                            if extracted[key] != state["data"].get(key):  # Only update if value is different
+                                print(f"DEBUG main.py: Updating {key} from {state['data'].get(key)} to {extracted[key]}")
+                                state["data"][key] = extracted[key]
+                
+            print("DEBUG main.py: Updated state after extraction:", state)
     
     # Update calculated values based on available data
     state = update_calculated_values(state)
@@ -1018,10 +1094,17 @@ def process_query(user_query: str, previous_system_response: str = "", full_hist
         "retirement_balance": state["data"].get("retirement_balance"),
         "retirement_drawdown_age": state["data"].get("retirement_drawdown_age"),
         "intent": intent,
+        "previous_intent": state["data"].get("previous_intent"),
+        "original_intent": state["data"].get("original_intent"),  
         "is_new_intent": is_new_intent,
-        "previous_var": state["data"].get("last_var")
-    }
+         "previous_var": state["data"].get("last_var"),
+        "user_query": user_query 
+}
     
+    # For update_variable intent, store the entire previous state data for reference
+    if intent == "update_variable":
+        context["previous_data"] = state.get("data", {})
+
     print(f"DEBUG main.py: retirement_income_option in state: {state['data'].get('retirement_income_option')}")
     print(f"DEBUG main.py: retirement_income_option in context: {context.get('retirement_income_option')}")
     print("DEBUG main.py: State data before context creation:", state["data"])

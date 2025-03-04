@@ -1,6 +1,6 @@
 import gradio as gr
 from backend.main import process_query, parse_numeric_with_suffix, validate_response, get_clarification_prompt, df
-from backend.helper import ask_llm, get_unified_variable_response, update_calculated_values
+from backend.helper import ask_llm, get_unified_variable_response, update_calculated_values, extract_intent_variables
 from backend.utils import match_fund_name
 from backend.cashflow import calculate_income_net_of_super, calculate_after_tax_income
 import json
@@ -346,6 +346,27 @@ def chat_fn(user_message, history, state):
     previous_system_response = next((msg["content"] for msg in reversed(internal_history) if msg["role"] == "assistant"), "")
     full_history = " ".join(msg["content"] for msg in internal_history if msg["role"] == "user")
     
+    # If this is an update_variable intent, handle previous intent tracking
+    extracted = extract_intent_variables(user_message, previous_system_response)
+    if extracted.get("intent") == "update_variable":
+        # We need to store the ORIGINAL intent (not update_variable)
+        # Only set previous_intent if it doesn't exist yet or isn't already update_variable
+        if "previous_intent" not in state["data"] or state["data"].get("previous_intent") == "update_variable":
+            if state["data"].get("intent") and state["data"].get("intent") != "update_variable":
+                state["data"]["original_intent"] = state["data"].get("intent")
+        else:
+            # If previous_intent exists and isn't update_variable, preserve it as original_intent
+            if state["data"].get("previous_intent") and state["data"].get("previous_intent") != "update_variable":
+                state["data"]["original_intent"] = state["data"].get("previous_intent")
+
+        # ONLY update the values that were explicitly mentioned (not 0 or None)
+        for key, value in extracted.items():
+            if key == "intent":
+                state["data"][key] = value
+            elif value is not None and (not isinstance(value, (int, float)) or value != 0):
+                state["data"][key] = value
+                print(f"DEBUG app.py: For update_variable, updating {key} to {value}")
+
     answer = process_query(user_message, previous_system_response, full_history, state)
     
     # Always ensure we have a valid response and add to history in Gradio format
