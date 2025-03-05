@@ -34,78 +34,199 @@ supabase_client = httpx.AsyncClient(
     base_url=SUPABASE_URL,
     headers={
         "apikey": SUPABASE_KEY,
-        "Content-Type": "application/json"
+        "Authorization": f"Bearer {SUPABASE_KEY}",
+        "Content-Type": "application/json",
+        "Prefer": "return=minimal"
     }
 )
 
 # User session management
 active_sessions = {}
 
+import asyncio
+
 async def get_or_create_user(email, first_name=None, last_name=None):
     """
     Get existing user or create a new one in Supabase
     """
     try:
-        # First check if user exists by email
+        # First check if user exists by email in our application users table
         response = await supabase_client.get(
             f"/rest/v1/users?email=eq.{email}&select=*"
         )
         
         if response.status_code == 200 and len(response.json()) > 0:
+            print(f"Found existing application user with email {email}")
             return response.json()[0]
         
-        # User doesn't exist, create a new one
-        # First create auth user
-        auth_response = await supabase_client.post(
-            "/auth/v1/signup",
-            json={
-                "email": email,
-                "password": f"temp_{os.urandom(8).hex()}"  # Generate random password - user should reset
-            }
+        # Check if auth user exists but application user doesn't
+        auth_users_response = await supabase_client.get(
+            "/auth/v1/admin/users",
+            headers={"Authorization": f"Bearer {SUPABASE_KEY}"}
         )
         
-        if auth_response.status_code != 200:
-            raise Exception(f"Failed to create auth user: {auth_response.text}")
+        user_id = None
+        if auth_users_response.status_code == 200:
+            users = auth_users_response.json().get("users", [])
+            for user in users:
+                if user.get("email") == email:
+                    user_id = user.get("id")
+                    print(f"Found existing auth user with email {email} and ID {user_id}")
+                    break
         
-        user_id = auth_response.json()["user"]["id"]
+        # If no existing auth user found, create one
+        if not user_id:
+            auth_response = await supabase_client.post(
+                "/auth/v1/signup",
+                json={
+                    "email": email,
+                    "password": f"temp_{os.urandom(8).hex()}"  # Generate random password
+                }
+            )
+            
+            if auth_response.status_code != 200:
+                raise Exception(f"Failed to create auth user: {auth_response.text}")
+            
+            auth_data = auth_response.json()
+            user_id = auth_data.get("id") or auth_data.get("user", {}).get("id")
+            
+            if not user_id:
+                print(f"Full auth response: {auth_data}")
+                raise Exception("Could not extract user ID from authentication response")
+            
+            print(f"Successfully created auth user with ID: {user_id}")
+            
+            # Small delay to ensure auth user is fully propagated
+            await asyncio.sleep(1)
         
-        # Create user record
-        user_response = await supabase_client.post(
-            "/rest/v1/rpc/create_user_with_profile",
+        # Now create the application user record in the users table
+        user_insert_response = await supabase_client.post(
+            "/rest/v1/users",
+            headers={
+                "apikey": SUPABASE_KEY,
+                "Authorization": f"Bearer {SUPABASE_KEY}",
+                "Prefer": "return=representation"
+            },
             json={
-                "user_uuid": user_id,
-                "user_email": email,
+                "id": user_id,
+                "email": email,
                 "first_name": first_name or "Anonymous",
                 "last_name": last_name or "User",
-                "phone": None,
+                "consent_timestamp": "now()",
                 "privacy_version": "1.0",
                 "terms_version": "1.0"
             }
         )
         
-        if user_response.status_code != 200:
-            raise Exception(f"Failed to create user profile: {user_response.text}")
+        if user_insert_response.status_code not in [200, 201]:
+            # If direct insert fails, try using SQL with admin privileges
+            print(f"Direct insert failed: {user_insert_response.text}. Trying SQL approach...")
+            
+            # Sanitize inputs to prevent SQL injection
+            safe_email = email.replace("'", "''")
+            safe_first_name = (first_name or "Anonymous").replace("'", "''")
+            safe_last_name = (last_name or "User").replace("'", "''")
+            
+            sql_query = f"""
+            INSERT INTO public.users (
+                id, 
+                email, 
+                first_name, 
+                last_name, 
+                created_at, 
+                updated_at, 
+                consent_timestamp,
+                privacy_version,
+                terms_version
+            ) 
+            VALUES (
+                '{user_id}', 
+                '{safe_email}', 
+                '{safe_first_name}', 
+                '{safe_last_name}', 
+                now(), 
+                now(), 
+                now(),
+                '1.0',
+                '1.0'
+            )
+            ON CONFLICT (id) DO NOTHING
+            RETURNING *;
+            """
+            
+            sql_response = await supabase_client.post(
+                "/rest/v1/rpc/run_sql",
+                headers={
+                    "apikey": SUPABASE_KEY,
+                    "Authorization": f"Bearer {SUPABASE_KEY}"
+                },
+                json={"sql": sql_query}
+            )
+            
+            if sql_response.status_code != 200:
+                print(f"SQL insertion failed: {sql_response.text}")
+                raise Exception(f"Failed to create application user: {sql_response.text}")
+            
+            print("Successfully created application user via SQL")
+        else:
+            print("Successfully created application user via direct insert")
+        
+        # Now create the financial profile
+        profile_response = await supabase_client.post(
+            "/rest/v1/rpc/update_financial_profile",
+            headers={
+                "apikey": SUPABASE_KEY,
+                "Authorization": f"Bearer {SUPABASE_KEY}"
+            },
+            json={
+                "p_user_id": user_id,
+                "p_current_age": None,
+                "p_current_balance": None,
+                "p_current_income": None,
+                "p_retirement_age": None,
+                "p_current_fund": None,
+                "p_super_included": None,
+                "p_retirement_income_option": None,
+                "p_retirement_income": None
+            }
+        )
+        
+        if profile_response.status_code != 200:
+            print(f"Warning: Could not create financial profile: {profile_response.text}")
+        else:
+            print(f"Successfully created financial profile")
         
         # Get the created user
         new_user_response = await supabase_client.get(
-            f"/rest/v1/users?id=eq.{user_id}&select=*"
+            f"/rest/v1/users?id=eq.{user_id}&select=*",
+            headers={
+                "apikey": SUPABASE_KEY,
+                "Authorization": f"Bearer {SUPABASE_KEY}"
+            }
         )
         
-        if new_user_response.status_code != 200:
-            raise Exception("Failed to retrieve created user")
-            
+        if new_user_response.status_code != 200 or not new_user_response.json():
+            print(f"Warning: Could not retrieve user after creation: {new_user_response.text}")
+            return {"id": user_id, "email": email}
+        
+        print(f"Successfully retrieved created user")
         return new_user_response.json()[0]
     
     except Exception as e:
         print(f"Error in get_or_create_user: {e}")
-        # Return a default user object if we can't connect to Supabase
-        return {"id": str(uuid.uuid4()), "email": email}
+        print(f"Falling back to local user. Exception details: {str(e)}")
+        return {"id": "local-user", "email": email}
 
 async def create_chat_session(user_id):
     """
     Create a new chat session in Supabase
     """
     try:
+        # Skip for local users
+        if user_id == "local-user":
+            print("Using local session for local user")
+            return "local-session"
+        
         response = await supabase_client.post(
             "/rest/v1/rpc/find_or_create_chat_session",
             json={
@@ -115,20 +236,25 @@ async def create_chat_session(user_id):
         )
         
         if response.status_code != 200:
-            raise Exception(f"Failed to create chat session: {response.text}")
+            print(f"Failed to create chat session: {response.text}")
+            return "local-session"
             
         return response.json()
     
     except Exception as e:
         print(f"Error in create_chat_session: {e}")
-        # Return a default session ID if we can't connect to Supabase
         return "local-session"
-
+    
 async def record_chat_message(session_id, sender_type, content):
     """
     Record a chat message in Supabase
     """
     try:
+        # Skip for local sessions
+        if session_id == "local-session":
+            print("Skipping message recording for local session")
+            return
+        
         response = await supabase_client.post(
             "/rest/v1/rpc/record_chat_message",
             json={
@@ -143,13 +269,17 @@ async def record_chat_message(session_id, sender_type, content):
     
     except Exception as e:
         print(f"Error in record_chat_message: {e}")
-        # Non-blocking - continue even if we can't record the message
 
 async def update_user_financial_profile(user_id, state_data):
     """
     Update the user's financial profile in Supabase
     """
     try:
+        # Skip for local users
+        if user_id == "local-user":
+            print("Skipping database update for local user")
+            return
+        
         response = await supabase_client.post(
             "/rest/v1/rpc/update_financial_profile",
             json={
@@ -170,16 +300,17 @@ async def update_user_financial_profile(user_id, state_data):
     
     except Exception as e:
         print(f"Error in update_user_financial_profile: {e}")
-        # Non-blocking - continue even if we can't update the profile
 
 async def record_user_intent(user_id, session_id, intent_type, state_data):
     """
     Record the user's intent in Supabase
     """
     try:
-        if not intent_type or intent_type == "unknown":
+        # Skip for local users/sessions or unknown intents
+        if user_id == "local-user" or session_id == "local-session" or not intent_type or intent_type == "unknown":
+            print("Skipping intent recording for local user/session or unknown intent")
             return
-            
+        
         # Prepare intent data
         intent_data = {
             "current_age": state_data.get("current_age"),
@@ -211,7 +342,6 @@ async def record_user_intent(user_id, session_id, intent_type, state_data):
     
     except Exception as e:
         print(f"Error in record_user_intent: {e}")
-        # Non-blocking - continue even if we can't record the intent
 
 async def extract_variable_from_response(last_prompt: str, user_message: str, context: dict, missing_var: str) -> dict:
     """
