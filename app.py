@@ -7,6 +7,7 @@ import json
 import re
 import os
 import httpx
+import uuid
 from dotenv import load_dotenv
 
 # Load environment variables
@@ -98,7 +99,7 @@ async def get_or_create_user(email, first_name=None, last_name=None):
     except Exception as e:
         print(f"Error in get_or_create_user: {e}")
         # Return a default user object if we can't connect to Supabase
-        return {"id": "local-user", "email": email}
+        return {"id": str(uuid.uuid4()), "email": email}
 
 async def create_chat_session(user_id):
     """
@@ -333,7 +334,7 @@ async def extract_variable_from_response(last_prompt: str, user_message: str, co
                 else:
                     # Try to use LLM to interpret ambiguous responses
                     interpret_prompt = f"Does this response indicate that super is INCLUDED in the income amount or PAID ON TOP? Response: '{raw_value}'"
-                    interpretation = ask_llm("You are a boolean interpreter. Answer with ONLY 'included' or 'on top'.", interpret_prompt)
+                    interpretation = await ask_llm("You are a boolean interpreter. Answer with ONLY 'included' or 'on top'.", interpret_prompt)
                     data['value'] = interpretation.lower().strip() == "included"
             elif isinstance(raw_value, bool):
                 data['value'] = raw_value
@@ -374,7 +375,7 @@ async def extract_variable_from_response(last_prompt: str, user_message: str, co
                 else:
                     # Try to use LLM to interpret ambiguous responses
                     interpret_prompt = f"Which retirement income option does this response most closely match: 'same_as_current', 'modest_single', 'modest_couple', 'comfortable_single', 'comfortable_couple', or 'custom'? Response: '{raw_value}'"
-                    interpretation = ask_llm("You are an option interpreter. Answer with ONLY one of these options: 'same_as_current', 'modest_single', 'modest_couple', 'comfortable_single', 'comfortable_couple', or 'custom'.", interpret_prompt)
+                    interpretation = await ask_llm("You are an option interpreter. Answer with ONLY one of these options: 'same_as_current', 'modest_single', 'modest_couple', 'comfortable_single', 'comfortable_couple', or 'custom'.", interpret_prompt)
                     data['value'] = interpretation.lower().strip()
 
         return data
@@ -528,7 +529,7 @@ async def chat_fn(user_message, history, state, user_info=None):
                     "intent": state["data"].get("intent"),
                     "previous_var": state["data"].get("last_var")
                 })
-                unified_message = get_unified_variable_response(next_var, None, context, missing_vars)
+                unified_message = await get_unified_variable_response(next_var, None, context, missing_vars)
                 state["data"]["last_clarification_prompt"] = unified_message
                 state["missing_var"] = next_var
                 
@@ -595,7 +596,7 @@ async def chat_fn(user_message, history, state, user_info=None):
     full_history = " ".join(msg["content"] for msg in internal_history if msg["role"] == "user")
     
     # If this is an update_variable intent, handle previous intent tracking
-    extracted = extract_intent_variables(user_message, previous_system_response)
+    extracted = await extract_intent_variables(user_message, previous_system_response)
     if extracted.get("intent") == "update_variable":
         # We need to store the ORIGINAL intent (not update_variable)
         # Only set previous_intent if it doesn't exist yet or isn't already update_variable

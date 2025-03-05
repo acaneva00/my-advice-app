@@ -904,7 +904,7 @@ async def process_query(user_query: str, previous_system_response: str = "", ful
         # Only run intent extraction if we're not collecting variables
         if not state.get("missing_var"):
             # Run initial extraction.
-            extracted = extract_intent_variables(user_query, previous_system_response)
+            extracted = await extract_intent_variables(user_query, previous_system_response)
             
             # Then adjust numeric fields if previous_system_response suggests so.
             if previous_system_response:
@@ -1252,7 +1252,7 @@ async def process_query(user_query: str, previous_system_response: str = "", ful
         print(f"DEBUG main.py: Intent = {intent}")
         print(f"DEBUG main.py: Context = {context}")
         
-        unified_message = get_unified_variable_response(canonical, state["data"].get(canonical, ""), context, missing_vars)
+        unified_message = await get_unified_variable_response(canonical, state["data"].get(canonical, ""), context, missing_vars)
         print("DEBUG main.py: Unified message:", unified_message)
         state["data"]["last_clarification_prompt"] = unified_message
         if is_new_intent and acknowledgment:

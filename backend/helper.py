@@ -1,5 +1,5 @@
 import os
-from openai import OpenAI
+from openai import AsyncOpenAI
 import json
 import time
 import logging
@@ -7,13 +7,14 @@ from backend.cashflow import calculate_income_net_of_super, calculate_after_tax_
 from backend.constants import economic_assumptions
 from backend.utils import project_super_balance, match_fund_name, filter_dataframe_by_fund_name, find_applicable_funds
 import pandas as pd
+import re
 
 # Check for OpenAI API key
 if not os.environ.get("OPENAI_API_KEY"):
     raise ValueError("OPENAI_API_KEY environment variable is not set")
 
 # Initialize the OpenAI client - new SDK style
-openai_client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
+openai_client = AsyncOpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
 from tenacity import (
     retry,
     stop_after_attempt, 
@@ -53,7 +54,7 @@ async def ask_llm(system_prompt, user_prompt):
         logger.error(f"OpenAI API Error: {e}")
         return "I apologize, but I'm having trouble processing your request right now. Let's try again."
 
-def get_unified_variable_response(var_key: str, raw_value, context: dict, missing_vars: list) -> str:
+async def get_unified_variable_response(var_key: str, raw_value, context: dict, missing_vars: list) -> str:
     """
     Generate a unified response for variable collection that includes intent acknowledgment
     only when there's a new intent, and is more conversational and context-aware.
@@ -87,7 +88,7 @@ def get_unified_variable_response(var_key: str, raw_value, context: dict, missin
             if current_income is not None and current_income > 0 and retirement_age is not None:
                 after_tax_income = calculate_after_tax_income(current_income, retirement_age)
         
-        return get_retirement_income_options_prompt(retirement_balance, after_tax_income)
+        return await get_retirement_income_options_prompt(retirement_balance, after_tax_income)
 
     # Define intent acknowledgments
     intent_messages = {
@@ -130,10 +131,10 @@ def get_unified_variable_response(var_key: str, raw_value, context: dict, missin
                 user_prompt = f"Could you please tell me your {get_variable_description(var_key)}?"
         
         print(f"DEBUG get_unified_variable_response: Generated prompt: {user_prompt}")
-        return ask_llm(system_prompt, user_prompt)
+        return await ask_llm(system_prompt, user_prompt)
     
     # For clarifications of invalid responses, return just the clarification request
-    return ask_llm(system_prompt, f"Ask for the user's {var_key} in a friendly way.")
+    return await ask_llm(system_prompt, f"Ask for the user's {var_key} in a friendly way.")
 
 def get_variable_description(var_key: str) -> str:
     """Helper function to get friendly variable descriptions."""
@@ -152,7 +153,7 @@ def get_variable_description(var_key: str) -> str:
     }
     return descriptions.get(var_key, var_key)
 
-def extract_intent_variables(user_query: str, previous_system_response: str = "") -> dict:
+async def extract_intent_variables(user_query: str, previous_system_response: str = "") -> dict:
     """
     Uses the LLM to extract key variables from a user query and the most recent system response.
     Expected output is a JSON object with the following keys:
@@ -208,12 +209,15 @@ def extract_intent_variables(user_query: str, previous_system_response: str = ""
              "- CRITICAL: When the user specifies a custom retirement income amount (e.g., 'what if I took $70k instead', 'what about $80,000 per year'), ALWAYS:\n"
             "  1. Extract the numeric value in 'retirement_income'\n"
             "  2. Set 'retirement_income_option' to \"custom\"\n"
+            # Update this section in your system prompt
             "- CRITICAL: When the user asks about delaying or postponing retirement (e.g., 'what if I delayed retirement by X years', 'what if I retired X years later'), ALWAYS:\n"
-            "  1. Extract the current retirement_age from context\n"
-            "  2. Add the specified number of years to the current retirement_age to create a new retirement_age value\n"
-            "  3. Include both the original and new retirement_age in your response for clarity\n"
+            "  1. The correct interpretation is to ADD the number of years to the current retirement age\n"
+            "  2. Do NOT set retirement_age to be the raw number of years mentioned\n"
+            "  3. For example, if current retirement age is 65 and user says 'delay by 2 years', set retirement_age to 67, not 2\n"
+            "  4. NEVER set retirement_age to be younger than current_age\n"
             "- If the user is asking a 'what if' question that changes a specific variable (e.g., 'what if I retire at 67', 'what if my income was $75k'), "
-            "- set intent to 'update_variable' and extract the modified variable value, including updating 'retirement_income_option' to \"custom\" when appropriate.\n\n"
+            "- set intent to 'update_variable' and extract the modified variable value, including updating 'retirement_income_option' to \"custom\" when appropriate, "
+            "- and leave all other variables unchanged. \n\n"
             "Intent Classification Examples:\n"
             "- 'How much super will I have when I retire?' → intent: project_balance\n"
             "- 'What will my balance be at retirement?' → intent: project_balance\n"
@@ -237,7 +241,7 @@ def extract_intent_variables(user_query: str, previous_system_response: str = ""
         print("DEBUG intent_extractor.py: Full prompt for variable extraction:")
         print(user_prompt)
         
-        response = openai_client.chat.completions.create(
+        response = await openai_client.chat.completions.create(
             model="gpt-4",
             messages=[
                 {"role": "system", "content": system_prompt},
