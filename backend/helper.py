@@ -34,12 +34,12 @@ logger = logging.getLogger(__name__)
     after=after_log(logger, logging.INFO)
 )
 
-def ask_llm(system_prompt, user_prompt):
+async def ask_llm(system_prompt, user_prompt):
     print("DEBUG: Entering ask_llm()")
     print("DEBUG: system_prompt=", system_prompt)
     print("DEBUG: user_prompt=", user_prompt)
     try:
-        response = openai_client.chat.completions.create(
+        response = await openai_client.chat.completions.create(
             model="gpt-4",
             messages=[
                 {"role": "system", "content": system_prompt},

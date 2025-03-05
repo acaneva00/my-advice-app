@@ -5,8 +5,214 @@ from backend.utils import match_fund_name
 from backend.cashflow import calculate_income_net_of_super, calculate_after_tax_income
 import json
 import re
+import os
+import httpx
+from dotenv import load_dotenv
 
-def extract_variable_from_response(last_prompt: str, user_message: str, context: dict, missing_var: str) -> dict:
+# Load environment variables
+load_dotenv()
+
+# Debug: Check available Supabase-related environment variables
+print("Available environment variables:", [k for k in os.environ.keys() if "SUPABASE" in k])
+
+# Supabase configuration
+SUPABASE_URL = os.getenv("SUPABASE_URL")
+SUPABASE_KEY = os.getenv("SUPABASE_SERVICE_KEY")  # Make sure this matches your .env file
+
+# Check if variables are loaded properly
+if not SUPABASE_URL or not SUPABASE_KEY:
+    print("Warning: Supabase credentials not found in environment variables")
+    print(f"SUPABASE_URL: {'Found' if SUPABASE_URL else 'Missing'}")
+    print(f"SUPABASE_KEY: {'Found' if SUPABASE_KEY else 'Missing'}")
+    # Set fallback values to prevent errors (won't actually connect to Supabase)
+    SUPABASE_URL = SUPABASE_URL or "http://localhost"
+    SUPABASE_KEY = SUPABASE_KEY or "dummy-key"
+
+# Initialize HTTP client for Supabase
+supabase_client = httpx.AsyncClient(
+    base_url=SUPABASE_URL,
+    headers={
+        "apikey": SUPABASE_KEY,
+        "Content-Type": "application/json"
+    }
+)
+
+# User session management
+active_sessions = {}
+
+async def get_or_create_user(email, first_name=None, last_name=None):
+    """
+    Get existing user or create a new one in Supabase
+    """
+    try:
+        # First check if user exists by email
+        response = await supabase_client.get(
+            f"/rest/v1/users?email=eq.{email}&select=*"
+        )
+        
+        if response.status_code == 200 and len(response.json()) > 0:
+            return response.json()[0]
+        
+        # User doesn't exist, create a new one
+        # First create auth user
+        auth_response = await supabase_client.post(
+            "/auth/v1/signup",
+            json={
+                "email": email,
+                "password": f"temp_{os.urandom(8).hex()}"  # Generate random password - user should reset
+            }
+        )
+        
+        if auth_response.status_code != 200:
+            raise Exception(f"Failed to create auth user: {auth_response.text}")
+        
+        user_id = auth_response.json()["user"]["id"]
+        
+        # Create user record
+        user_response = await supabase_client.post(
+            "/rest/v1/rpc/create_user_with_profile",
+            json={
+                "user_uuid": user_id,
+                "user_email": email,
+                "first_name": first_name or "Anonymous",
+                "last_name": last_name or "User",
+                "phone": None,
+                "privacy_version": "1.0",
+                "terms_version": "1.0"
+            }
+        )
+        
+        if user_response.status_code != 200:
+            raise Exception(f"Failed to create user profile: {user_response.text}")
+        
+        # Get the created user
+        new_user_response = await supabase_client.get(
+            f"/rest/v1/users?id=eq.{user_id}&select=*"
+        )
+        
+        if new_user_response.status_code != 200:
+            raise Exception("Failed to retrieve created user")
+            
+        return new_user_response.json()[0]
+    
+    except Exception as e:
+        print(f"Error in get_or_create_user: {e}")
+        # Return a default user object if we can't connect to Supabase
+        return {"id": "local-user", "email": email}
+
+async def create_chat_session(user_id):
+    """
+    Create a new chat session in Supabase
+    """
+    try:
+        response = await supabase_client.post(
+            "/rest/v1/rpc/find_or_create_chat_session",
+            json={
+                "p_user_id": user_id,
+                "p_platform": "webchat"
+            }
+        )
+        
+        if response.status_code != 200:
+            raise Exception(f"Failed to create chat session: {response.text}")
+            
+        return response.json()
+    
+    except Exception as e:
+        print(f"Error in create_chat_session: {e}")
+        # Return a default session ID if we can't connect to Supabase
+        return "local-session"
+
+async def record_chat_message(session_id, sender_type, content):
+    """
+    Record a chat message in Supabase
+    """
+    try:
+        response = await supabase_client.post(
+            "/rest/v1/rpc/record_chat_message",
+            json={
+                "p_session_id": session_id,
+                "p_sender_type": sender_type,
+                "p_content": content
+            }
+        )
+        
+        if response.status_code != 200:
+            print(f"Warning: Failed to record message: {response.text}")
+    
+    except Exception as e:
+        print(f"Error in record_chat_message: {e}")
+        # Non-blocking - continue even if we can't record the message
+
+async def update_user_financial_profile(user_id, state_data):
+    """
+    Update the user's financial profile in Supabase
+    """
+    try:
+        response = await supabase_client.post(
+            "/rest/v1/rpc/update_financial_profile",
+            json={
+                "p_user_id": user_id,
+                "p_current_age": state_data.get("current_age"),
+                "p_current_balance": state_data.get("current_balance"),
+                "p_current_income": state_data.get("current_income"),
+                "p_retirement_age": state_data.get("retirement_age"),
+                "p_current_fund": state_data.get("current_fund"),
+                "p_super_included": state_data.get("super_included"),
+                "p_retirement_income_option": state_data.get("retirement_income_option"),
+                "p_retirement_income": state_data.get("retirement_income")
+            }
+        )
+        
+        if response.status_code != 200:
+            print(f"Warning: Failed to update profile: {response.text}")
+    
+    except Exception as e:
+        print(f"Error in update_user_financial_profile: {e}")
+        # Non-blocking - continue even if we can't update the profile
+
+async def record_user_intent(user_id, session_id, intent_type, state_data):
+    """
+    Record the user's intent in Supabase
+    """
+    try:
+        if not intent_type or intent_type == "unknown":
+            return
+            
+        # Prepare intent data
+        intent_data = {
+            "current_age": state_data.get("current_age"),
+            "current_balance": state_data.get("current_balance"),
+            "current_income": state_data.get("current_income"),
+            "retirement_age": state_data.get("retirement_age"),
+            "current_fund": state_data.get("current_fund"),
+            "super_included": state_data.get("super_included"),
+            "income_net_of_super": state_data.get("income_net_of_super"),
+            "after_tax_income": state_data.get("after_tax_income"),
+            "retirement_balance": state_data.get("retirement_balance"),
+            "retirement_income": state_data.get("retirement_income"),
+            "retirement_income_option": state_data.get("retirement_income_option"),
+            "retirement_drawdown_age": state_data.get("retirement_drawdown_age")
+        }
+        
+        response = await supabase_client.post(
+            "/rest/v1/rpc/record_user_intent",
+            json={
+                "p_user_id": user_id,
+                "p_session_id": session_id,
+                "p_intent_type": intent_type,
+                "p_intent_data": intent_data
+            }
+        )
+        
+        if response.status_code != 200:
+            print(f"Warning: Failed to record intent: {response.text}")
+    
+    except Exception as e:
+        print(f"Error in record_user_intent: {e}")
+        # Non-blocking - continue even if we can't record the intent
+
+async def extract_variable_from_response(last_prompt: str, user_message: str, context: dict, missing_var: str) -> dict:
     """
     Extract a specific variable from the user's response based on what was asked.
     Returns a dictionary with 'variable' and 'value' keys.
@@ -71,7 +277,7 @@ def extract_variable_from_response(last_prompt: str, user_message: str, context:
     print("DEBUG extract_variable_from_response: User's answer:")
     print(user_message)
 
-    response = ask_llm(system_prompt, combined_prompt)
+    response = await ask_llm(system_prompt, combined_prompt)
     print("DEBUG extract_variable_from_response: Raw LLM response:")
     print(response)
 
@@ -179,7 +385,8 @@ def extract_variable_from_response(last_prompt: str, user_message: str, context:
         print("DEBUG extract_variable_from_response: Unexpected error:", e)
         return {}
         
-def chat_fn(user_message, history, state):
+# Modified chat function with Supabase integration
+async def chat_fn(user_message, history, state, user_info=None):
     print(f"\n\n==== NEW MESSAGE RECEIVED: {user_message} ====\n\n")
     print(f"DEBUG app.py: Entering chat_fn")
     print(f"DEBUG app.py: User message: {user_message}")
@@ -190,6 +397,25 @@ def chat_fn(user_message, history, state):
         state = {"data": {"super_included": None}, "missing_var": None}
     if history is None:
         history = []
+    
+    # Get or create user if user_info is provided
+    user_id = "local-user"
+    session_id = "local-session"
+    
+    if user_info and "email" in user_info:
+        user = await get_or_create_user(
+            user_info["email"],
+            user_info.get("first_name"),
+            user_info.get("last_name")
+        )
+        user_id = user["id"]
+        
+        # Get the user's active session or create a new one
+        if user_id not in active_sessions:
+            session_id = await create_chat_session(user_id)
+            active_sessions[user_id] = session_id
+        else:
+            session_id = active_sessions[user_id]
 
     # For Gradio 3.x, history must be a list of tuples (user_message, bot_response)
     # We'll convert our internal dictionary-based messages to this format when returning
@@ -237,7 +463,7 @@ def chat_fn(user_message, history, state):
         last_prompt = state["data"].get("last_clarification_prompt", "")
         
         # Extract variable from response
-        extraction = extract_variable_from_response(last_prompt, user_message, context, var_marker)
+        extraction = await extract_variable_from_response(last_prompt, user_message, context, var_marker)
         print(f"DEBUG app.py: LLM extraction result: {extraction}")
         
         if extraction.get("variable") and extraction.get("value") is not None:
@@ -315,11 +541,28 @@ def chat_fn(user_message, history, state):
                 
                 print("DEBUG: Processing complete query after collecting all variables")
                 
-                answer = process_query(user_message, previous_system_response, full_history, state)
+                answer = await process_query(user_message, previous_system_response, full_history, state)
                 
                 print(f"DEBUG: Got answer: {answer}")
 
                 if answer:
+                    # Record messages in Supabase
+                    await record_chat_message(session_id, "user", user_message)
+                    await record_chat_message(session_id, "assistant", answer)
+                    
+                    # Update user profile with collected data
+                    if state.get("data"):
+                        await update_user_financial_profile(user_id, state["data"])
+                        
+                        # Record intent if it exists and changed
+                        if state["data"].get("intent") and state["data"].get("intent") != "unknown":
+                            await record_user_intent(
+                                user_id,
+                                session_id,
+                                state["data"]["intent"],
+                                state["data"]
+                            )
+                    
                     print("DEBUG: Adding final answer to history")
                     # Create a new list with the same content as history to avoid reference issues
                     new_history = [(msg1, msg2) for msg1, msg2 in history]
@@ -329,6 +572,11 @@ def chat_fn(user_message, history, state):
                     history = new_history
                     print(f"DEBUG: Final history length: {len(history)}")
                 else:
+                    # Handle error case
+                    error_message = "I apologize, but I couldn't process that request. Could you please try again?"
+                    await record_chat_message(session_id, "user", user_message)
+                    await record_chat_message(session_id, "assistant", error_message)
+                    
                     print("DEBUG: No answer received, adding error message")
                     new_history = [(msg1, msg2) for msg1, msg2 in history]
                     new_history.append((user_message, "I apologize, but I couldn't process that request. Could you please try again?"))
@@ -367,39 +615,102 @@ def chat_fn(user_message, history, state):
                 state["data"][key] = value
                 print(f"DEBUG app.py: For update_variable, updating {key} to {value}")
 
-    answer = process_query(user_message, previous_system_response, full_history, state)
+    answer = await process_query(user_message, previous_system_response, full_history, state)
     
     # Always ensure we have a valid response and add to history in Gradio format
     if answer:
+        await record_chat_message(session_id, "user", user_message)
+        await record_chat_message(session_id, "assistant", answer)
+        
+        # Update user profile if we have data
+        if state.get("data"):
+            await update_user_financial_profile(user_id, state["data"])
+            
+            # Record intent if it exists
+            if state["data"].get("intent") and state["data"].get("intent") != "unknown":
+                await record_user_intent(
+                    user_id,
+                    session_id,
+                    state["data"]["intent"],
+                    state["data"]
+                )
+        
         history.append((user_message, answer))
     else:
-        history.append((user_message, "I apologize, but I couldn't process that request. Could you please try again?"))
-    
+        error_message = "I apologize, but I couldn't process that request. Could you please try again?"
+        await record_chat_message(session_id, "user", user_message)
+        await record_chat_message(session_id, "assistant", error_message)
+        history.append((user_message, error_message))    
     return history, state, ""
 
-# Modified Gradio initialization to ensure HTML rendering works
-# Replace the Gradio UI section in app.py with this
+# Add this new function for user login
+def login(email, first_name, last_name):
+    if not email or "@" not in email:
+        return "Please enter a valid email address"
+    
+    # Create a simple user info object
+    user_info = {
+        "email": email,
+        "first_name": first_name or "Anonymous",
+        "last_name": last_name or "User"
+    }
+    
+    # Store in a session cookie or similar mechanism
+    # For now, we'll use a global variable for demonstration
+    return f"Logged in as {email}", user_info
 
+# Modified Gradio for user login
 with gr.Blocks() as demo:
-    # Define your welcome message.
+    # Define your welcome message
     initial_message = (
         "Hi there, I'm your friendly money mentor. "
         "My goal is to help you make informed, confident decisions about your money. "
-        "You can start by asking me a question. " 
-        "For example, would you like to know the cheapest superfund for you, or an estimate of your super balance at retirement? "
-        "If there's something else on your mind, just let me know!"
+        "Please log in to get started!"
     )
     
-    # Pre-populate the chatbot with the welcome message.
-    chatbot = gr.Chatbot(value=[("", initial_message)], render=True, height=600)
-    state = gr.State(None)
+    # Store user info in Gradio state
+    user_info_state = gr.State(None)
+    
+    # Create a login form
     with gr.Row():
-        txt = gr.Textbox(
-            show_label=False, 
-            placeholder="Enter your message and press enter",
-            container=False
-        )
-    txt.submit(chat_fn, [txt, chatbot, state], [chatbot, state, txt], queue=True)
+        with gr.Column(scale=3):
+            email_input = gr.Textbox(label="Email", placeholder="your.email@example.com")
+            with gr.Row():
+                first_name_input = gr.Textbox(label="First Name (optional)", placeholder="First Name")
+                last_name_input = gr.Textbox(label="Last Name (optional)", placeholder="Last Name")
+            login_button = gr.Button("Login")
+            login_status = gr.Textbox(label="Status")
+    
+    # Chat interface (initially hidden)
+    chat_interface = gr.Column(visible=False)
+    with chat_interface:
+        chatbot = gr.Chatbot(value=[("", initial_message)], render=True, height=600)
+        state = gr.State(None)
+        with gr.Row():
+            txt = gr.Textbox(
+                show_label=False, 
+                placeholder="Enter your message and press enter",
+                container=False
+            )
+    
+    # Connect login button to the login function
+    login_button.click(
+        fn=login,
+        inputs=[email_input, first_name_input, last_name_input],
+        outputs=[login_status, user_info_state]
+    ).then(
+        fn=lambda user_info: (gr.update(visible=False), gr.update(visible=True)) if user_info else (gr.update(visible=True), gr.update(visible=False)),
+        inputs=[user_info_state],
+        outputs=[gr.Row(visible=True, elem_id="login_row"), chat_interface]
+    )
+    
+    # Connect chat input to the chat function
+    txt.submit(
+        fn=chat_fn,
+        inputs=[txt, chatbot, state, user_info_state],
+        outputs=[chatbot, state, txt],
+        queue=True
+    )
 
 demo.queue()
 print("\n\n==== APPLICATION STARTUP COMPLETE ====\n\n")

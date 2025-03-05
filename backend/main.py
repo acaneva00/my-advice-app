@@ -121,7 +121,7 @@ def validate_response(var_name: str, user_message: str, context: dict) -> Tuple[
     except Exception:
         return False, None
 
-def get_clarification_prompt(var_name: str, user_message: str, context: dict) -> str:
+async def get_clarification_prompt(var_name: str, user_message: str, context: dict) -> str:
     # Debug prints to trace execution and inputs:
     print("DEBUG get_clarification_prompt: Entering function")
     print(f"DEBUG get_clarification_prompt: var_name = {var_name}")
@@ -152,7 +152,7 @@ def get_clarification_prompt(var_name: str, user_message: str, context: dict) ->
     
     Keep it to one or two short sentences maximum.
     """
-    result = ask_llm(system_prompt, user_prompt)
+    result = await ask_llm(system_prompt, user_prompt)
     print("DEBUG get_clarification_prompt: LLM returned:", result)
     return result
     
@@ -185,7 +185,7 @@ def get_intent_acknowledgment(intent: str, user_query: str) -> str:
     return ask_llm(system_prompt, user_prompt)
     """
 
-def process_compare_fees_nominated(context: dict) -> str:
+async def process_compare_fees_nominated(context: dict) -> str:
     """Process compare_fees_nominated intent with the given context."""
     current_fund = context["current_fund"]
     nominated_fund = context["nominated_fund"]
@@ -235,9 +235,9 @@ def process_compare_fees_nominated(context: dict) -> str:
         "primarily due to differences in [FEE COMPONENTS].\n\n"
         "Do not include any extra commentary."
     )
-    return ask_llm(system_prompt, user_prompt)
+    return await ask_llm(system_prompt, user_prompt)
 
-def process_compare_fees_all(context: dict) -> str:
+async def process_compare_fees_all(context: dict) -> str:
     """Process compare_fees_all intent with the given context."""
     user_age = context["current_age"]
     user_balance = context["current_balance"]
@@ -306,7 +306,7 @@ def process_compare_fees_all(context: dict) -> str:
     )
     
     # Get the text response from the LLM
-    llm_answer = ask_llm(system_prompt, user_prompt)
+    llm_answer = await ask_llm(system_prompt, user_prompt)
     print(f"DEBUG main.py: Generated LLM answer, length: {len(llm_answer)}")
     
     try:
@@ -325,7 +325,7 @@ def process_compare_fees_all(context: dict) -> str:
         # Return just the text response if chart generation fails
         return llm_answer
     
-def process_find_cheapest(context: dict) -> str:
+async def process_find_cheapest(context: dict) -> str:
     """Process find_cheapest intent with the given context."""
     user_age = context["current_age"]
     user_balance = context["current_balance"]
@@ -355,9 +355,9 @@ def process_find_cheapest(context: dict) -> str:
         "which is {fee_percentage}% of your current account balance.\n\n"
         "Do not include any extra commentary or reference any funds other than the one provided in the data."
     )
-    return ask_llm(system_prompt, user_prompt)
+    return await ask_llm(system_prompt, user_prompt)
 
-def process_project_balance(context: dict) -> str:
+async def process_project_balance(context: dict) -> str:
     """Process project_balance intent with the given context."""
     user_age = context["current_age"]
     current_fund = context["current_fund"]
@@ -424,9 +424,9 @@ def process_project_balance(context: dict) -> str:
         "specifically highlighting the impact of your current fund's fees (which are recalculated monthly), investment performance, wage growth, and inflation."
     )
     
-    return ask_llm(system_prompt, user_prompt)
+    return await ask_llm(system_prompt, user_prompt)
 
-def process_compare_balance_projection(context: dict) -> str:
+async def process_compare_balance_projection(context: dict) -> str:
     """Process compare_balance_projection intent with the given context."""
     user_age = context["current_age"]
     current_fund = context["current_fund"]
@@ -543,9 +543,9 @@ def process_compare_balance_projection(context: dict) -> str:
         "to create this gap in projected balances."
     )
     
-    return ask_llm(system_prompt, user_prompt)
+    return await ask_llm(system_prompt, user_prompt)
 
-def process_retirement_outcome(context: dict) -> str:
+async def process_retirement_outcome(context: dict) -> str:
     """Process retirement_outcome intent with the given context."""
     print("DEBUG: Entering process_retirement_outcome function")
     user_age = context["current_age"]
@@ -715,9 +715,9 @@ def process_retirement_outcome(context: dict) -> str:
         "Keep your response informative but conversational, and under 200 words."
     )
     
-    return ask_llm(system_prompt, user_prompt)
+    return await ask_llm(system_prompt, user_prompt)
 
-def get_retirement_income_options_prompt(retirement_balance: float, after_tax_income: float) -> str:
+async def get_retirement_income_options_prompt(retirement_balance: float, after_tax_income: float) -> str:
     """Generate a prompt explaining retirement income options with proper values"""
     asfa_standards = get_asfa_standards()
 
@@ -751,9 +751,9 @@ def get_retirement_income_options_prompt(retirement_balance: float, after_tax_in
         f"Keep your response conversational and concise, avoiding formal letter formats."
     )
     
-    return ask_llm(system_prompt, user_prompt)
+    return await ask_llm(system_prompt, user_prompt)
 
-def process_update_variable(context: dict) -> str:
+async def process_update_variable(context: dict) -> str:
     """Process update_variable intent by re-running the previous intent with updated values."""
     print(f"DEBUG process_update_variable: Received context: {context}")
     
@@ -792,21 +792,21 @@ def process_update_variable(context: dict) -> str:
     
     # Run the appropriate process function with the updated context
     if original_intent == "project_balance":
-        return process_project_balance(updated_context)
+        return await process_project_balance(updated_context)
     elif original_intent == "compare_fees_nominated":
-        return process_compare_fees_nominated(updated_context)
+        return await process_compare_fees_nominated(updated_context)
     elif original_intent == "compare_fees_all":
-        return process_compare_fees_all(updated_context)
+        return await process_compare_fees_all(updated_context)
     elif original_intent == "find_cheapest":
-        return process_find_cheapest(updated_context)
+        return await process_find_cheapest(updated_context)
     elif original_intent == "compare_balance_projection":
-        return process_compare_balance_projection(updated_context)
+        return await process_compare_balance_projection(updated_context)
     elif original_intent == "retirement_outcome":
-        return process_retirement_outcome(updated_context)
+        return await process_retirement_outcome(updated_context)
     else:
         return "I'm not sure which calculation you'd like to update. Could you please provide a complete query?"
 
-def process_default_comparison(context: dict) -> str:
+async def process_default_comparison(context: dict) -> str:
     """Process default comparison when no specific intent is matched."""
     user_age = context["current_age"]
     user_balance = context["current_balance"]
@@ -843,9 +843,9 @@ def process_default_comparison(context: dict) -> str:
     2) Explain why there is a fee difference.
     3) Conclude with a statement on the potential impact on retirement balance.
     """
-    return ask_llm(system_prompt, user_prompt)
+    return await ask_llm(system_prompt, user_prompt)
 
-def process_intent(intent: str, context: dict) -> str:
+async def process_intent(intent: str, context: dict) -> str:
     print(f"DEBUG process_intent: Received intent: {intent}")
     print(f"DEBUG process_intent: Received context: {context}")
     
@@ -859,21 +859,21 @@ def process_intent(intent: str, context: dict) -> str:
             intent = context_intent
 
         if intent == "compare_fees_nominated":
-            response = process_compare_fees_nominated(context)
+            response = await process_compare_fees_nominated(context)
         elif intent == "compare_fees_all":
-            response = process_compare_fees_all(context)
+            response = await process_compare_fees_all(context)
         elif intent == "find_cheapest":
-            response = process_find_cheapest(context)
+            response = await process_find_cheapest(context)
         elif intent == "project_balance":
-            response = process_project_balance(context)
+            response = await process_project_balance(context)
         elif intent == "compare_balance_projection":
-            response = process_compare_balance_projection(context)
+            response = await process_compare_balance_projection(context)
         elif intent == "retirement_outcome":
-            response = process_retirement_outcome(context)
+            response = await process_retirement_outcome(context)
         elif intent == "update_variable":
-            response = process_update_variable(context)
+            response = await process_update_variable(context)
         else:
-            response = process_default_comparison(context)
+            response = await process_default_comparison(context)
         
         if not response:
             response = "I apologize, but I couldn't generate a response. Please try again."
@@ -885,7 +885,7 @@ def process_intent(intent: str, context: dict) -> str:
         print(f"DEBUG process_intent: Error processing intent: {e}")
         return "I apologize, but I encountered an error while processing your request. Please try again."
 
-def process_query(user_query: str, previous_system_response: str = "", full_history: str = "", state: dict = None) -> str:
+async def process_query(user_query: str, previous_system_response: str = "", full_history: str = "", state: dict = None) -> str:
     print(f"DEBUG main.py: Entering process_query")
     print(f"DEBUG main.py: User query: {user_query}")
     print(f"DEBUG main.py: Previous response: {previous_system_response}")
@@ -1267,7 +1267,7 @@ def process_query(user_query: str, previous_system_response: str = "", full_hist
     
     # Process the intent and generate response
     print("DEBUG main.py: State before processing intent:", state)
-    response = process_intent(intent, context)
+    response = await process_intent(intent, context)
     print("DEBUG main.py: State after processing intent:", state)
     
     # Include acknowledgment if it's a new intent
