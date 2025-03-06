@@ -3,12 +3,23 @@ from backend.main import process_query, parse_numeric_with_suffix, validate_resp
 from backend.helper import ask_llm, get_unified_variable_response, update_calculated_values, extract_intent_variables
 from backend.utils import match_fund_name
 from backend.cashflow import calculate_income_net_of_super, calculate_after_tax_income
+from backend.supabase.chatService import ChatService
+from flask import Flask, request, jsonify
+from flask_cors import CORS
+import threading
 import json
 import re
 import os
 import httpx
 import uuid
 from dotenv import load_dotenv
+
+# Initialize Flask app
+flask_app = Flask(__name__)
+CORS(flask_app)
+
+# Initialize the chat service
+chat_service = ChatService()
 
 # Load environment variables
 load_dotenv()
@@ -187,7 +198,11 @@ async def get_or_create_user(email, first_name=None, last_name=None):
                 "p_current_fund": None,
                 "p_super_included": None,
                 "p_retirement_income_option": None,
-                "p_retirement_income": None
+                "p_retirement_income": None,
+                "p_income_net_of_super": None,
+                "p_after_tax_income": None,
+                "p_retirement_balance": None,
+                "p_retirement_drawdown_age": None
             }
         )
         
@@ -291,7 +306,11 @@ async def update_user_financial_profile(user_id, state_data):
                 "p_current_fund": state_data.get("current_fund"),
                 "p_super_included": state_data.get("super_included"),
                 "p_retirement_income_option": state_data.get("retirement_income_option"),
-                "p_retirement_income": state_data.get("retirement_income")
+                "p_retirement_income": state_data.get("retirement_income"),
+                "p_income_net_of_super": state_data.get("income_net_of_super"),
+                "p_after_tax_income": state_data.get("after_tax_income"),
+                "p_retirement_balance": state_data.get("retirement_balance"),
+                "p_retirement_drawdown_age": state_data.get("retirement_drawdown_age")
             }
         )
         
@@ -790,13 +809,134 @@ def login(email, first_name, last_name):
     # For now, we'll use a global variable for demonstration
     return f"Logged in as {email}", user_info
 
+# Flask routes
+@flask_app.route('/create_session', methods=['POST'])
+def create_session():
+    data = request.json
+    user_id = data.get('user_id')
+    platform = data.get('platform', 'webchat')
+    
+    try:
+        result = chat_service.createOrFindSession(user_id, platform)
+        return jsonify({'session_id': result.get('sessionId')})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@flask_app.route('/chat_history', methods=['GET'])
+def chat_history():
+    session_id = request.args.get('session_id')
+    
+    if not session_id:
+        return jsonify({'error': 'Session ID is required'}), 400
+    
+    try:
+        messages = chat_service.getChatHistory(session_id)
+        return jsonify({'messages': messages})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@flask_app.route('/record_message', methods=['POST'])
+def record_message():
+    data = request.json
+    session_id = data.get('session_id')
+    content = data.get('content')
+    sender_type = data.get('sender_type')
+    
+    if not all([session_id, content, sender_type]):
+        return jsonify({'error': 'Session ID, content, and sender type are required'}), 400
+    
+    try:
+        result = chat_service.recordMessage(session_id, sender_type, content)
+        return jsonify({'message_id': result.get('messageId')})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@flask_app.route('/process_query', methods=['POST'])
+def process_query_endpoint():
+    data = request.json
+    session_id = data.get('session_id')
+    user_message = data.get('user_message')
+    user_id = data.get('user_id')
+    
+    if not all([session_id, user_message]):
+        return jsonify({'error': 'Session ID and user message are required'}), 400
+    
+    try:
+        # Retrieve chat history
+        history = chat_service.getChatHistory(session_id)
+        
+        # Build history context
+        previous_messages = []
+        for msg in history:
+            previous_messages.append(msg)
+        
+        # Get the previous system response if available
+        previous_system_response = ""
+        for msg in reversed(previous_messages):
+            if msg['sender_type'] == 'assistant':
+                previous_system_response = msg['content']
+                break
+        
+        # Get full history as a single string
+        full_history = " ".join([msg['content'] for msg in previous_messages if msg['sender_type'] == 'user'])
+        
+        # Get or initialize state
+        state = {
+            "data": {
+                "intent": "unknown",
+                "super_included": None
+            }
+        }
+        
+        # Process the query
+        response = process_query(user_message, previous_system_response, full_history, state)
+        
+        # Record the assistant's response
+        result = chat_service.recordMessage(session_id, 'assistant', response)
+        
+        # Update user financial profile if we have useful data
+        if state.get("data"):
+            from backend.supabase.userService import UserService
+            user_service = UserService()
+            profile_data = {
+                "currentAge": state["data"].get("current_age"),
+                "currentBalance": state["data"].get("current_balance"),
+                "currentIncome": state["data"].get("current_income"),
+                "retirementAge": state["data"].get("retirement_age"),
+                "currentFund": state["data"].get("current_fund"),
+                "superIncluded": state["data"].get("super_included"),
+                "retirementIncomeOption": state["data"].get("retirement_income_option"),
+                "retirementIncome": state["data"].get("retirement_income")
+            }
+            user_service.updateFinancialProfile(user_id, profile_data)
+            
+            # Record intent if it exists and is not unknown
+            if state["data"].get("intent") and state["data"].get("intent") != "unknown":
+                chat_service.recordIntent(
+                    user_id,
+                    session_id,
+                    state["data"]["intent"],
+                    state["data"]
+                )
+        
+        return jsonify({
+            'message_id': result.get('messageId'),
+            'content': response,
+            'state': state
+        })
+    except Exception as e:
+        print(f"Error processing query: {e}")
+        return jsonify({'error': str(e)}), 500
+
 # Modified Gradio for user login
 with gr.Blocks() as demo:
     # Define your welcome message
     initial_message = (
         "Hi there, I'm your friendly money mentor. "
         "My goal is to help you make informed, confident decisions about your money. "
-        "Please log in to get started!"
+        "You can start by asking me a question. " 
+        "For example, would you like to know the cheapest superfund for you, or an estimate of your super balance at retirement? "
+        "If there's something else on your mind, just let me know!"
     )
     
     # Store user info in Gradio state
@@ -842,6 +982,12 @@ with gr.Blocks() as demo:
         outputs=[chatbot, state, txt],
         queue=True
     )
+
+# Start Flask in a separate thread
+flask_thread = threading.Thread(target=lambda: flask_app.run(host='0.0.0.0', port=7861))
+flask_thread.daemon = True
+flask_thread.start()
+print("\n\n==== FLASK API STARTED ON PORT 7861 ====\n\n")
 
 demo.queue()
 print("\n\n==== APPLICATION STARTUP COMPLETE ====\n\n")

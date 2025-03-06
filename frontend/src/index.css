@@ -1,0 +1,64 @@
+@import url('https://fonts.googleapis.com/css2?family=Montserrat:wght@400;500;600;700&family=Roboto:wght@300;400;500&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+body {
+  @apply bg-neutral font-body text-gray-800;
+}
+
+h1, h2, h3, h4, h5, h6 {
+  @apply font-heading;
+}
+
+/* Custom chat styling */
+.chat-bubble {
+  @apply rounded-lg px-4 py-2 max-w-xs md:max-w-md lg:max-w-lg break-words;
+}
+
+.chat-bubble.user {
+  @apply bg-primary text-white;
+}
+
+.chat-bubble.assistant {
+  @apply bg-white;
+}
+
+.chat-bubble.system {
+  @apply bg-red-100 text-red-800;
+}
+
+/* Loading animations */
+.typing-indicator {
+  display: inline-flex;
+  align-items: center;
+}
+
+.typing-indicator span {
+  height: 8px;
+  width: 8px;
+  background-color: #3EA76F;
+  border-radius: 50%;
+  display: inline-block;
+  margin-right: 4px;
+  animation: bounce 1.3s linear infinite;
+}
+
+.typing-indicator span:nth-child(2) {
+  animation-delay: 0.15s;
+}
+
+.typing-indicator span:nth-child(3) {
+  animation-delay: 0.3s;
+  margin-right: 0;
+}
+
+@keyframes bounce {
+  0%, 60%, 100% {
+    transform: translateY(0);
+  }
+  30% {
+    transform: translateY(-4px);
+  }
+}

@@ -66,3 +66,20 @@ ANZ SmartChoice,BIRTHYEAR,1960,1969,NaN,NaN,60-95%,0.55,"[{""rate"":0.2,""min_ba
 ANZ SmartChoice,BIRTHYEAR,1950,1959,NaN,NaN,50-80%,0.55,"[{""rate"":0.2,""min_bal"":0,""max_bal"":9999999}]",$60
 ANZ SmartChoice,BIRTHYEAR,1900,1949,NaN,NaN,40-80%,0.55,"[{""rate"":0.2,""min_bal"":0,""max_bal"":9999999}]",$60
 CBUS,AGE,NaN,NaN,0,200,83%,0.42,"[{""rate"":0.19,""min_bal"":0,""max_bal"":526315}]",$52
+Hostplus,AGE,NaN,NaN,0,200,76%,1.02,"[{""rate"":0,""min_bal"":0,""max_bal"":0}]",$78
+REST Super,AGE,NaN,NaN,0,200,68%,0.63,"[{""rate"":0.10,""min_bal"":0,""max_bal"":600000}]",$78
+REST Corporate,AGE,NaN,NaN,0,200,68%,0.63,"[{""rate"":0.10,""min_bal"":0,""max_bal"":600000}]",$78
+UniSuper Personal Account,AGE,NaN,NaN,0,200,74%,0.62,"[{""rate"":0,""min_bal"":0,""max_bal"":0}]",$96
+Mercer Business Super,BIRTHYEAR,1900,1953,NaN,NaN,60%,0.67,"[{""rate"":0.10,""min_bal"":0,""max_bal"":500000}]",$96
+Mercer Business Super,BIRTHYEAR,1954,1958,NaN,NaN,60%,0.67,"[{""rate"":0.10,""min_bal"":0,""max_bal"":500000}]",$96
+Mercer Business Super,BIRTHYEAR,1959,1963,NaN,NaN,69%,0.69,"[{""rate"":0.10,""min_bal"":0,""max_bal"":500000}]",$96
+Mercer Business Super,BIRTHYEAR,1964,1968,NaN,NaN,78%,0.71,"[{""rate"":0.10,""min_bal"":0,""max_bal"":500000}]",$96
+Mercer Business Super,BIRTHYEAR,1969,1973,NaN,NaN,88%,0.71,"[{""rate"":0.10,""min_bal"":0,""max_bal"":500000}]",$96
+Mercer Business Super,BIRTHYEAR,1974,2023,NaN,NaN,88%,0.71,"[{""rate"":0.10,""min_bal"":0,""max_bal"":500000}]",$96
+Mercer SmartSuper,BIRTHYEAR,1900,1953,NaN,NaN,60%,0.67,"[{""rate"":0.10,""min_bal"":0,""max_bal"":500000}]",$96
+Mercer SmartSuper,BIRTHYEAR,1954,1958,NaN,NaN,60%,0.67,"[{""rate"":0.10,""min_bal"":0,""max_bal"":500000}]",$96
+Mercer SmartSuper,BIRTHYEAR,1959,1963,NaN,NaN,69%,0.69,"[{""rate"":0.10,""min_bal"":0,""max_bal"":500000}]",$96
+Mercer SmartSuper,BIRTHYEAR,1964,1968,NaN,NaN,78%,0.71,"[{""rate"":0.10,""min_bal"":0,""max_bal"":500000}]",$96
+Mercer SmartSuper,BIRTHYEAR,1969,1973,NaN,NaN,88%,0.71,"[{""rate"":0.10,""min_bal"":0,""max_bal"":500000}]",$96
+Mercer SmartSuper,BIRTHYEAR,1974,2023,NaN,NaN,88%,0.71,"[{""rate"":0.10,""min_bal"":0,""max_bal"":500000}]",$96
+HESTA,AGE,NaN,NaN,0,200,88%,0.62,"[{""rate"":0.15,""min_bal"":0,""max_bal"":500000}]",$52
