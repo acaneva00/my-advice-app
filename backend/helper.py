@@ -172,6 +172,31 @@ async def extract_intent_variables(user_query: str, previous_system_response: st
     If extraction fails, default values are returned.
     """
     try:
+        # First, check if this is an affirmative response to a suggestion
+        # If so, return a simple dictionary with just the intent
+        if is_affirmative_response(user_query):
+            # Check if the previous response contains our standard suggestion patterns
+            suggestion_patterns = [
+                "how long this super balance might last",
+                "how these fee differences might affect",
+                "which fund would be the cheapest",
+                "compare the projected retirement balance",
+                "how long your projected balance might last",
+                "how different retirement income amounts might affect"
+            ]
+            
+            if previous_system_response and any(pattern in previous_system_response.lower() for pattern in suggestion_patterns):
+                # Try to determine which suggestion was in the previous response
+                
+                for intent, connection in INTENT_CONNECTIONS.items():
+                    if connection["prompt"] in previous_system_response:
+                        # Return the suggested next intent
+                        return {"intent": connection["primary_next"]}
+                
+                # If we couldn't match a specific connection but it does look like a suggestion,
+                # return a generic affirmative response
+                return {"intent": "affirmative_response"}
+        
         system_prompt = (
             "You are an expert intent extractor for queries regarding financial calculations and product comparisons in the Australian market. "
             "Given the user's query and the most recent system response (if any), extract the following variables and output them as a valid JSON object with no extra commentary:\n\n"
@@ -206,10 +231,12 @@ async def extract_intent_variables(user_query: str, previous_system_response: st
             "- If the user is comparing a fund mentioned in the previous response with their fund, extract both fund names correctly, properly assign current_fund and nominated_fund\n"
             "- If the user is responding to a question about retirement income options (modest_single, modest_couple, etc.) or selecting 'same_as_current', keep the intent as 'retirement_outcome'.\n"
             "- When retirement_income_option is 'custom', ALWAYS extract the numeric value mentioned in the user query (e.g., '$90k', '90000', '90k') and include it as retirement_income in your response.\n"
-             "- CRITICAL: When the user specifies a custom retirement income amount (e.g., 'what if I took $70k instead', 'what about $80,000 per year'), ALWAYS:\n"
+            "- CRITICAL: When the previous system response suggests a particular option or intent that the user might be interested in, ALWAYS:\n"
+            "  1. Check the previous system response to determine and extract the new intent value\n"
+            "  2. If the user response is in the affirmative, store the suggested query as a new intent\n"
+            "- CRITICAL: When the user specifies a custom retirement income amount (e.g., 'what if I took $70k instead', 'what about $80,000 per year'), ALWAYS:\n"
             "  1. Extract the numeric value in 'retirement_income'\n"
             "  2. Set 'retirement_income_option' to \"custom\"\n"
-            # Update this section in your system prompt
             "- CRITICAL: When the user asks about delaying or postponing retirement (e.g., 'what if I delayed retirement by X years', 'what if I retired X years later'), ALWAYS:\n"
             "  1. The correct interpretation is to ADD the number of years to the current retirement age\n"
             "  2. Do NOT set retirement_age to be the raw number of years mentioned\n"
@@ -285,6 +312,108 @@ async def extract_intent_variables(user_query: str, previous_system_response: st
     except Exception as e:
         print(f"DEBUG intent_extractor.py: Unexpected error: {e}")
         raise
+
+# Define the connections between intents as a global constant
+INTENT_CONNECTIONS = {
+    "project_balance": {
+        "primary_next": "retirement_outcome",
+        "prompt": "Would you like to know how long this super balance might last in retirement? Or is there something else I can help you with?"
+    },
+    "compare_fees_nominated": {
+        "primary_next": "compare_balance_projection",
+        "prompt": "Would you like to see how these fee differences might affect your retirement balance over time? Or is there something else I can help you with?"
+    },
+    "compare_fees_all": {
+        "primary_next": "find_cheapest",
+        "prompt": "Would you like to know which fund would be the cheapest for your specific situation? Or is there something else I can help you with?"
+    },
+    "find_cheapest": {
+        "primary_next": "compare_fees_nominated",
+        "prompt": "Would you like to compare fees between this fund and your current fund? Or is there something else I can help you with?"
+    },
+    "compare_balance_projection": {
+        "primary_next": "retirement_outcome",
+        "prompt": "Would you like to know how long your projected balance might last in retirement? Or is there something else I can help you with?"
+    },
+    "retirement_outcome": {
+        "primary_next": "update_variable",
+        "prompt": "Would you like to see how different retirement income amounts might affect how long your super lasts? Or is there something else I can help you with?"
+    },
+}
+
+def get_next_intent_info(current_intent):
+    """
+    Get the next intent and prompt for a given intent.
+    Returns a tuple of (next_intent, suggestion_prompt).
+    """
+    connection = INTENT_CONNECTIONS.get(current_intent)
+    if not connection:
+        # Default suggestion if no specific connection exists
+        return ("unknown", "Is there anything else I can help you with regarding your superannuation?")
+    
+    return (connection["primary_next"], connection["prompt"])
+def get_suggestion_prompt(current_intent):
+    """
+    Get just the suggestion prompt for a given intent.
+    """
+    _, prompt = get_next_intent_info(current_intent)
+    return prompt
+
+def is_affirmative_response(user_message):
+    """
+    Check if the user's message is an affirmative response
+    to proceed with the suggested next intent.
+    """
+    affirmative_phrases = [
+        "yes", "yeah", "yep", "sure", "ok", "okay", "proceed", 
+        "go ahead", "let's do it", "let's go", "sounds good", 
+        "please do", "that would be good", "i'd like that",
+        "tell me", "show me", "continue"
+    ]
+    
+    # Clean up the message: lowercase and remove punctuation
+    cleaned_message = user_message.lower().strip()
+    for char in ".,!?":
+        cleaned_message = cleaned_message.replace(char, "")
+    
+    # Check if any affirmative phrase is in the cleaned message
+    for phrase in affirmative_phrases:
+        if phrase in cleaned_message or cleaned_message == phrase:
+            return True
+    
+    return False
+
+async def handle_next_intent_transition(user_message, context):
+    """
+    Handle the transition to the next intent if the user's response is affirmative.
+    Returns updated context with the new intent or None if no transition should occur.
+    """
+    # Check if context has a suggested next intent
+    if not context.get("suggested_next_intent"):
+        return None
+    
+    # Check if the user's response is affirmative
+    if not is_affirmative_response(user_message):
+        return None
+    
+    # Prepare for transition to the suggested next intent
+    next_intent = context["suggested_next_intent"]
+    
+    # Create updated context with new intent
+    updated_context = context.copy()
+    
+    # Store the original intent for reference
+    if context.get("intent") and context.get("intent") != "unknown":
+        updated_context["previous_intent"] = context["intent"]
+        
+    # Set the new intent
+    updated_context["intent"] = next_intent
+    
+    # Remove the suggestion now that we're acting on it
+    if "suggested_next_intent" in updated_context:
+        del updated_context["suggested_next_intent"]
+    
+    return updated_context
 
 def update_calculated_values(state):
     """Calculate and update derived values based on available data in state"""

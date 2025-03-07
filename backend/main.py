@@ -21,7 +21,16 @@ from backend.utils import (
     calculate_retirement_drawdown, 
     get_asfa_standards 
 )
-from backend.helper import extract_intent_variables, get_unified_variable_response, ask_llm, update_calculated_values
+
+from backend.helper import (
+    extract_intent_variables, 
+    get_unified_variable_response, 
+    ask_llm, 
+    update_calculated_values,
+    get_next_intent_info,
+    handle_next_intent_transition,
+    is_affirmative_response
+)
 
 # System prompts for LLM
 SYSTEM_PROMPTS = {
@@ -219,11 +228,15 @@ async def process_compare_fees_nominated(context: dict) -> str:
     current_breakdown = compute_fee_breakdown(current_rows.iloc[0], user_balance)
     nominated_breakdown = compute_fee_breakdown(nominated_rows.iloc[0], user_balance)
     
+    next_intent, suggestion_prompt = get_next_intent_info("compare_fees_nominated")
+    context.setdefault('data', {})['suggested_next_intent'] = next_intent
+
     user_prompt = (
         f"Data: Your current fund ({current_fund}) has total annual fees of "
         f"${current_breakdown['total_fee']:,.2f} ({(current_breakdown['total_fee']/user_balance)*100:.2f}% of your balance). "
         f"The nominated fund ({nominated_fund}) has total annual fees of "
         f"${nominated_breakdown['total_fee']:,.2f} ({(nominated_breakdown['total_fee']/user_balance)*100:.2f}% of your balance)."
+        f"Suggestion prompt: {suggestion_prompt}"
     )
     system_prompt = (
         "You are a financial guru that calculates total superannuation fees for Australian consumers. "
@@ -233,6 +246,8 @@ async def process_compare_fees_nominated(context: dict) -> str:
         "and respond EXACTLY in the following format:\n\n"
         "Comparing your [CURRENT FUND] fund and [NOMINATED FUND], your fund charges [X]% of your account balance while [NOMINATED FUND] charges [X]%, "
         "primarily due to differences in [FEE COMPONENTS].\n\n"
+        "Final paragraph: Use exactly the suggestion prompt provided in the data to ask about the next steps. "
+        "Do not modify the suggestion prompt text.\n\n"
         "Do not include any extra commentary."
     )
     return await ask_llm(system_prompt, user_prompt)
@@ -280,6 +295,9 @@ async def process_compare_fees_all(context: dict) -> str:
     if current_percentage is None:
         current_percentage = 0.0
     
+    next_intent, suggestion_prompt = get_next_intent_info("compare_fees_all")
+    context.setdefault('data', {})['suggested_next_intent'] = next_intent
+
     user_prompt = (
         f"Data:\n"
         f"Number of funds compared: {num_funds}\n"
@@ -288,7 +306,8 @@ async def process_compare_fees_all(context: dict) -> str:
         f"Most expensive fund: {expensive[0]} with an annual fee of ${expensive[1]:,.2f} "
         f"({expensive_percentage:.2f}% of your balance)\n"
         f"Your current fund: {current_fund if current_fund else 'N/A'} which ranks {current_rank} "
-        f"among the {num_funds} funds, representing {current_percentage:.2f}% of your balance.\n\n"
+        f"among the {num_funds} funds, representing {current_percentage:.2f}% of your balance.\n"
+        f"Suggestion prompt: {suggestion_prompt}\n"
         "Please use the data above."
     )
     
@@ -303,6 +322,7 @@ async def process_compare_fees_all(context: dict) -> str:
         "[percentage of account balance]% of your current account balance.\n\n"
         "Then, provide a single concise sentence describing the major cause of the fee difference between your current fund "
         "and the cheapest fund (for example, whether the difference is primarily due to a higher admin fee, investment fee, or member fee)."
+        "Do not modify the suggestion prompt text."
     )
     
     # Get the text response from the LLM
@@ -327,35 +347,56 @@ async def process_compare_fees_all(context: dict) -> str:
     
 async def process_find_cheapest(context: dict) -> str:
     """Process find_cheapest intent with the given context."""
-    user_age = context["current_age"]
-    user_balance = context["current_balance"]
+    try:
+        user_age = context.get("current_age", 0)
+        user_balance = context.get("current_balance", 0)
+        
+        matched_rows = find_applicable_funds(df, user_age)
+        if matched_rows.empty:
+            return "No applicable funds found for your age."
+        
+        fees = []
+        for idx, row in matched_rows.iterrows():
+            breakdown = compute_fee_breakdown(row, user_balance)
+            fees.append((row["FundName"], breakdown["total_fee"]))
+        fees.sort(key=lambda x: x[1])
+        
+        cheapest = fees[0]
+        num_funds = len(fees)
+        fee_percentage = (cheapest[1] / user_balance) * 100 if user_balance > 0 else 0.0
     
-    matched_rows = find_applicable_funds(df, user_age)
-    if matched_rows.empty:
-        return "No applicable funds found for your age."
-    
-    fees = []
-    for idx, row in matched_rows.iterrows():
-        breakdown = compute_fee_breakdown(row, user_balance)
-        fees.append((row["FundName"], breakdown["total_fee"]))
-    fees.sort(key=lambda x: x[1])
-    
-    cheapest = fees[0]
-    num_funds = len(fees)
-    fee_percentage = (cheapest[1] / user_balance) * 100 if user_balance > 0 else 0.0
-    
-    user_prompt = (
-        f"Data: {num_funds} funds compared; Cheapest fund: {cheapest[0]}; "
-        f"Annual fee: ${cheapest[1]:,.2f}; Fee percentage: {fee_percentage:.2f}%."
-    )
-    system_prompt = (
-        "You are a financial guru specializing in superannuation fees. "
-        "Using only the fee data provided below, respond EXACTLY in the following format (replace placeholders with actual values):\n\n"
-        "Of the {num_funds} funds compared, {cheapest_fund} is the cheapest, with an annual fee of ${total_fee} "
-        "which is {fee_percentage}% of your current account balance.\n\n"
-        "Do not include any extra commentary or reference any funds other than the one provided in the data."
-    )
-    return await ask_llm(system_prompt, user_prompt)
+        next_intent, suggestion_prompt = get_next_intent_info("find_cheapest")
+        print(f"DEBUG process_find_cheapest: Setting suggested_next_intent to {next_intent}")
+        context.setdefault('data', {})['suggested_next_intent'] = next_intent
+        print(f"DEBUG process_find_cheapest: Context data after setting: {context.get('data')}")
+        # Check if 'data' key exists, if not create it
+        if 'data' not in context:
+            context['data'] = {}
+        
+        # Store the nominated fund
+        context['data']['nominated_fund'] = cheapest[0]  # Store the cheapest fund as nominated fund
+
+        print(f"DEBUG process_find_cheapest: Final state of context: {context}")
+
+        user_prompt = (
+            f"Data: {num_funds} funds compared; Cheapest fund: {cheapest[0]}; "
+            f"Annual fee: ${cheapest[1]:,.2f}; Fee percentage: {fee_percentage:.2f}%.\n"
+            f"Suggestion prompt: {suggestion_prompt}"
+        )
+        system_prompt = (
+            "You are a financial guru specializing in superannuation fees. "
+            "Using only the fee data provided below, respond EXACTLY in the following format (replace placeholders with actual values):\n\n"
+            "Of the {num_funds} funds compared, {cheapest_fund} is the cheapest, with an annual fee of ${total_fee} "
+            "which is {fee_percentage}% of your current account balance.\n\n"
+            "Final paragraph: Use exactly the suggestion prompt provided in the data to ask about the next steps. "
+            "Do not modify the suggestion prompt text.\n\n"
+            "Do not include any extra commentary or reference any funds other than the one provided in the data."
+        )
+        return await ask_llm(system_prompt, user_prompt)
+    except Exception as e:
+        # Add detailed error handling
+        print(f"DEBUG process_find_cheapest: Error details: {repr(e)}")
+        return f"I'm sorry, I encountered an error while finding the cheapest fund. Please try again."
 
 async def process_project_balance(context: dict) -> str:
     """Process project_balance intent with the given context."""
@@ -403,6 +444,10 @@ async def process_project_balance(context: dict) -> str:
         current_fund_row
     )
     
+    next_intent, suggestion_prompt = get_next_intent_info("project_balance")
+    context.setdefault('data', {})['suggested_next_intent'] = next_intent 
+    context.setdefault('data', {})['retirement_balance'] = projected_balance
+        
     user_prompt = (
         f"Data:\n"
         f"Current age: {user_age}\n"
@@ -410,18 +455,24 @@ async def process_project_balance(context: dict) -> str:
         f"Current income: ${current_income:,.0f}\n"
         f"Income net of super: ${income_net_of_super:,.0f}\n"
         f"Desired retirement age: {retirement_age}\n"
+        f"Current fund: {matched_fund}\n"
         f"Assumptions: Wage growth = {wage_growth}%, Employer contribution rate = {employer_contribution_rate}%, "
         f"Gross investment return = {investment_return}%, Inflation rate = {inflation_rate}%.\n"
         f"Using your current fund's fee structure (which is recalculated monthly), the projected super balance at retirement is: "
-        f"${projected_balance:,.0f}."
+        f"${projected_balance:,.0f}.\n"
+        f"Suggestion prompt: {suggestion_prompt}"
     )
     
     system_prompt = (
         "You are a financial guru specializing in superannuation projections. "
-        "Based solely on the data provided, produce a response EXACTLY in the following format:\n\n"
-        "At retirement, you will have approximately $[projected_balance] in superannuation.\n\n"
-        "Then, in one concise sentence, explain the primary factors driving this projection, "
-        "specifically highlighting the impact of your current fund's fees (which are recalculated monthly), investment performance, wage growth, and inflation."
+        "1. First paragraph: Based solely on the data provided, produce a response EXACTLY in the following format:\n\n"
+        "At retirement, you will have approximately $[projected_balance] in your account with $[current_fund]. \n"
+        "This estimate is based on the default investment for your age, the fees specific to your account value and your fund's fee structures. \n\n"
+        "2. Second paragraph: In one concise sentence, explain the primary assumptions driving this projection, "
+        "specifically highlighting the impact of your current fund's fees (which are recalculated monthly), investment performance, wage growth, and inflation. \n\n"
+        "3. Final paragraph: Use exactly the suggestion prompt provided in the data to ask about the next steps. "
+        "Do not modify the suggestion prompt text.\n\n"
+        "Keep your response friendly, clear, and focused, with no extraneous information or caveats."
     )
     
     return await ask_llm(system_prompt, user_prompt)
@@ -511,6 +562,10 @@ async def process_compare_balance_projection(context: dict) -> str:
     current_breakdown = compute_fee_breakdown(current_fund_row, user_balance)
     nominated_breakdown = compute_fee_breakdown(nominated_fund_row, user_balance)
     
+    next_intent, suggestion_prompt = get_next_intent_info("compare_balance_projection")
+    context.setdefault('data', {})['suggested_next_intent'] = next_intent
+
+
     user_prompt = (
         f"Data:\n"
         f"Current age: {user_age}\n"
@@ -529,7 +584,8 @@ async def process_compare_balance_projection(context: dict) -> str:
         f"Projected balance at retirement with {matched_current_fund}: ${current_projected_balance:,.0f}\n"
         f"Projected balance at retirement with {matched_nominated_fund}: ${nominated_projected_balance:,.0f}\n"
         f"Absolute difference: ${absolute_difference:,.0f}\n"
-        f"Percentage difference: {percentage_difference:.2f}%"
+        f"Percentage difference: {percentage_difference:.2f}%\n"
+        f"Suggestion prompt: {suggestion_prompt}"
     )
     
     system_prompt = (
@@ -540,7 +596,8 @@ async def process_compare_balance_projection(context: dict) -> str:
         "while with [nominated_fund] it would be approximately $[nominated_balance].\n\n"
         "This represents a difference of $[difference] ([percentage]% [higher/lower]) over your working life.\n\n"
         "Then, add a concise explanation about how the difference in fees between the two funds compounds over time "
-        "to create this gap in projected balances."
+        "to create this gap in projected balances.\n\n"
+        "Final paragraph: Use exactly the suggestion prompt provided in the data to ask about the next steps. "
     )
     
     return await ask_llm(system_prompt, user_prompt)
@@ -663,6 +720,11 @@ async def process_retirement_outcome(context: dict) -> str:
         # Fallback to a default if somehow we don't have a valid income
         return "Could not determine your desired retirement income. Please specify an income option."
     
+    # Get next intent info from our centralized library
+    next_intent, suggestion_prompt = get_next_intent_info("retirement_outcome")
+    context.setdefault('data', {})['suggested_next_intent'] = next_intent
+    context.setdefault('data', {})['retirement_income'] = annual_retirement_income
+    
     # Use more conservative retirement investment return
     retirement_investment_return = economic_assumptions["RETIREMENT_INVESTMENT_RETURN"]
     inflation_rate = economic_assumptions["INFLATION_RATE"]
@@ -675,6 +737,11 @@ async def process_retirement_outcome(context: dict) -> str:
         retirement_investment_return,
         inflation_rate
     )
+
+    context.setdefault('data', {})['retirement_drawdown_age'] = depletion_age
+    # Store the depletion age in the context for future reference
+    if "data" in context:
+        context["data"]["retirement_drawdown_age"] = depletion_age
     
     # Format the retirement income option for display
     if retirement_income_option == "same_as_current":
@@ -702,17 +769,20 @@ async def process_retirement_outcome(context: dict) -> str:
         f"Retirement investment return: {retirement_investment_return}%\n"
         f"Inflation rate: {inflation_rate}%\n"
         f"Depletion age: {depletion_age}\n"
+        f"Suggestion prompt: {suggestion_prompt}"
     )
     
     system_prompt = (
         "You are a financial guru specializing in retirement planning. "
         "Based solely on the data provided, produce a response that follows this format:\n\n"
-        "First paragraph: Confirm their retirement balance and annual income in retirement.\n\n"
+        "First paragraph: Confirm their retirement balance and annual income in retirement with specific dollar amounts.\n\n"
         "Second paragraph: State how long their retirement savings are projected to last, "
         "emphasizing that this is based on the assumptions provided and actual results may vary.\n\n"
         "Third paragraph: Provide a brief explanation of key factors that could affect this projection, "
         "such as investment returns, inflation, unexpected expenses, or changes in retirement income needs.\n\n"
-        "Keep your response informative but conversational, and under 200 words."
+        "Final paragraph: Use exactly the suggestion prompt provided in the data to ask about the next steps. "
+        "Do not modify the suggestion prompt text.\n\n"
+        "Keep your response informative, conversational, and under 200 words."
     )
     
     return await ask_llm(system_prompt, user_prompt)
@@ -882,7 +952,10 @@ async def process_intent(intent: str, context: dict) -> str:
         return response
         
     except Exception as e:
-        print(f"DEBUG process_intent: Error processing intent: {e}")
+        import traceback
+        error_details = traceback.format_exc()
+        print(f"DEBUG process_intent: Error processing intent: {repr(e)}")
+        print(f"DEBUG process_intent: Error traceback: {error_details}")
         return "I apologize, but I encountered an error while processing your request. Please try again."
 
 async def process_query(user_query: str, previous_system_response: str = "", full_history: str = "", state: dict = None) -> str:
@@ -895,6 +968,30 @@ async def process_query(user_query: str, previous_system_response: str = "", ful
     # Ensure state is a dictionary.
     if state is None or not isinstance(state, dict):
         state = {"data": {}}
+
+    # Check if we need to handle a transition to a suggested next intent
+    if state.get("data", {}).get("suggested_next_intent") and user_query.strip():
+        from backend.helper import handle_next_intent_transition, is_affirmative_response
+        
+        # Check if we should transition based on the user's response
+        if is_affirmative_response(user_query):
+            print(f"DEBUG main.py: Detected affirmative response to suggestion")
+            updated_context = await handle_next_intent_transition(user_query, state.get("data", {}))
+            
+            if updated_context:
+                print(f"DEBUG main.py: Transitioning to suggested next intent: {updated_context.get('intent')}")
+                # Update the intent in the state
+                state["data"]["intent"] = updated_context.get("intent")
+                if updated_context.get("previous_intent"):
+                    state["data"]["previous_intent"] = updated_context.get("previous_intent")
+                
+                # Clear the suggestion since we're acting on it
+                if "suggested_next_intent" in state["data"]:
+                    del state["data"]["suggested_next_intent"]
+                    
+                # For update_variable intent, make sure we have an original_intent to refer back to
+                if state["data"]["intent"] == "update_variable" and not state["data"].get("original_intent"):
+                    state["data"]["original_intent"] = state["data"].get("previous_intent")
 
     # If the user query is empty, don't override state values.
     if not user_query.strip():
@@ -929,6 +1026,30 @@ async def process_query(user_query: str, previous_system_response: str = "", ful
     intent = extracted.get("intent", "unknown")
     print("DEBUG process_query: Extracted intent:")
     print(intent)
+    
+    if intent == "unknown" and user_query.strip():
+        # Check if this is an affirmative response to a previous suggestion
+        print(f"DEBUG process_query: Unknown intent detected, checking for suggestion in state: {state.get('data', {}).get('suggested_next_intent')}")
+        if state.get("data", {}).get("suggested_next_intent"):
+            print(f"DEBUG process_query: Checking if '{user_query}' is an affirmative response")
+            print(f"DEBUG process_query: is_affirmative_response result: {is_affirmative_response(user_query)}")
+            if is_affirmative_response(user_query):
+                next_intent = state["data"]["suggested_next_intent"]
+                print(f"DEBUG process_query: Affirmative response detected, switching to suggested intent: {next_intent}")
+                intent = next_intent
+                # Save the previous intent for reference
+                state["data"]["previous_intent"] = state["data"].get("intent", "unknown")
+                # Remove the suggestion now that we're acting on it
+                print(f"DEBUG process_query: Removing suggested_next_intent from state")
+                state["data"].pop("suggested_next_intent", None)
+            else:
+                # If not affirmative, fall back to current intent
+                print(f"DEBUG process_query: Not an affirmative response, using stored intent")
+                intent = state["data"].get("intent", "unknown")
+        elif state["data"].get("intent") and state["data"].get("intent") != "unknown":
+            # No suggestion, just use current intent
+            print(f"DEBUG process_query: Using stored intent")
+            intent = state["data"]["intent"]
     
     if intent == "unknown" and state.get("data", {}).get("intent"):
         intent = state["data"]["intent"]
