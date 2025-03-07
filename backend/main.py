@@ -110,7 +110,7 @@ df = pd.read_csv(
 def validate_response(var_name: str, user_message: str, context: dict) -> Tuple[bool, Union[float, str, None]]:
     """Validate user response for a specific variable and return (is_valid, parsed_value)"""
     try:
-        if var_name in ["current income", "age", "super balance", "desired retirement age"]:
+        if var_name in ["current income", "age", "super balance", "desired retirement age", "retirement_income"]:
             value = parse_numeric_with_suffix(user_message)
             
             # Specific validation rules
@@ -120,7 +120,7 @@ def validate_response(var_name: str, user_message: str, context: dict) -> Tuple[
                 current_age = context.get("current_age", 0)
                 if value <= current_age or value > 100:
                     return False, None
-            if var_name in ["current income", "super balance"] and value < 0:
+            if var_name in ["current income", "super balance", "retirement_income"] and value < 0:
                 return False, None
                 
             return (value > 0), value
@@ -693,24 +693,34 @@ async def process_retirement_outcome(context: dict) -> str:
         asfa_standards = get_asfa_standards()
         annual_retirement_income = asfa_standards[retirement_income_option]["annual_amount"]
         print(f"DEBUG process_retirement_outcome: ASFA standard amount: {annual_retirement_income}")
-    elif retirement_income_option == "custom":
-        print(f"DEBUG process_retirement_outcome: Using custom amount: {context.get('retirement_income')}")
+    elif retirement_income_option == "custom" or (context.get("retirement_income") and context.get("retirement_income") > 0):
+        print(f"DEBUG process_retirement_outcome: Using custom amount")
+        # Try multiple ways to get the custom amount
         if context.get("retirement_income") and context.get("retirement_income") > 0:
             annual_retirement_income = context.get("retirement_income")
+            print(f"DEBUG process_retirement_outcome: From direct context: {annual_retirement_income}")
         elif "data" in context and context.get("data", {}).get("retirement_income", 0) > 0:
             annual_retirement_income = context["data"]["retirement_income"]
-        else:
+            print(f"DEBUG process_retirement_outcome: From context.data: {annual_retirement_income}")
+        elif "user_message" in context:
             # Extract the custom amount from the user_message if present
-            amount_match = None
-            if "user_message" in context:
-                amount_match = re.search(r'(\d[\d,.]*k?m?)', context["user_message"])
-            elif "data" in context and "last_clarification_prompt" in context["data"]:
-                amount_match = re.search(r'(\d[\d,.]*k?m?)', context["data"]["last_clarification_prompt"])
+            amount_match = re.search(r'(\d[\d,.]*k?m?)', context["user_message"])
             if amount_match:
-                from backend.main import parse_numeric_with_suffix
                 annual_retirement_income = parse_numeric_with_suffix(amount_match.group(1))
-            else:
-                return "Could not determine your desired retirement income. Please specify a custom amount."
+                print(f"DEBUG process_retirement_outcome: Extracted from user_message: {annual_retirement_income}")
+        
+        # If we still don't have a valid amount, check last_clarification_prompt
+        if (not annual_retirement_income or annual_retirement_income == 0) and "data" in context and "last_clarification_prompt" in context["data"]:
+            amount_match = re.search(r'(\d[\d,.]*k?m?)', context["data"]["last_clarification_prompt"])
+            if amount_match:
+                annual_retirement_income = parse_numeric_with_suffix(amount_match.group(1))
+                print(f"DEBUG process_retirement_outcome: Extracted from last_clarification_prompt: {annual_retirement_income}")
+        
+        # Set retirement_income_option to custom if we have a valid amount
+        if annual_retirement_income > 0:
+            context.setdefault('data', {})['retirement_income_option'] = "custom"
+        else:
+            return "Could not determine your desired retirement income. Please specify a custom amount."
     elif retirement_income and retirement_income > 0:
         print(f"DEBUG process_retirement_outcome: Using custom amount: {retirement_income}")
         # Use custom amount
@@ -840,6 +850,17 @@ async def process_update_variable(context: dict) -> str:
     
     # Create a new context that combines the current updates with the preserved values
     updated_context = context.copy()
+
+    # Special handling for retirement income updates
+    if context.get("retirement_income") and context.get("retirement_income") > 0:
+        # Ensure retirement_income is properly copied and retirement_income_option is set
+        updated_context["retirement_income"] = context["retirement_income"]
+        updated_context["retirement_income_option"] = "custom"
+        print(f"DEBUG process_update_variable: Updated retirement_income to {context['retirement_income']}")
+    elif original_intent == "retirement_outcome" and context.get("retirement_income") is not None:
+        # Handle case where retirement_income is explicitly set but might be 0
+        updated_context["retirement_income_option"] = "custom"
+        print(f"DEBUG process_update_variable: Setting custom retirement income to {context.get('retirement_income')}")
     
     # Get all fields from previous data except those that have been intentionally updated
     if context.get('previous_data'):
@@ -989,9 +1010,39 @@ async def process_query(user_query: str, previous_system_response: str = "", ful
                 if "suggested_next_intent" in state["data"]:
                     del state["data"]["suggested_next_intent"]
                     
+                # Special handling for retirement income update
+                if state["data"]["intent"] == "update_variable" and state["data"].get("previous_intent") == "retirement_outcome":
+                    # Check if the user provided an income amount in their affirmative response
+                    amount_match = re.search(r'(\d[\d,.]*k?m?)', user_query)
+                    if amount_match:
+                        # If amount is directly provided, extract and use it
+                        income_amount = parse_numeric_with_suffix(amount_match.group(1))
+                        state["data"]["retirement_income"] = income_amount
+                        state["data"]["retirement_income_option"] = "custom"
+                    else:
+                        # Ask for the income amount
+                        income_request = await generate_income_update_request()
+                        state["missing_var"] = "retirement_income"
+                        state["data"]["last_clarification_prompt"] = income_request
+                        return income_request
+                
                 # For update_variable intent, make sure we have an original_intent to refer back to
                 if state["data"]["intent"] == "update_variable" and not state["data"].get("original_intent"):
                     state["data"]["original_intent"] = state["data"].get("previous_intent")
+
+    if state.get("data", {}).get("needs_retirement_income_prompt"):
+        # Generate retirement income prompt
+        retirement_income_prompt = "What income would you like to model? Please provide an amount per year."
+        
+        # Save the state for the income amount we're expecting
+        state["missing_var"] = "retirement_income"
+        state["data"]["last_clarification_prompt"] = retirement_income_prompt
+        
+        # Remove the flag as we've handled it
+        state["data"].pop("needs_retirement_income_prompt", None)
+        
+        # Return the prompt to ask for a new income amount
+        return retirement_income_prompt
 
     # If the user query is empty, don't override state values.
     if not user_query.strip():
@@ -1003,6 +1054,37 @@ async def process_query(user_query: str, previous_system_response: str = "", ful
             # Run initial extraction.
             extracted = await extract_intent_variables(user_query, previous_system_response)
             
+            # Special handling for retirement income update that requires a prompt
+            if extracted.get("intent") == "update_variable" and extracted.get("requires_income_prompt"):
+                print("DEBUG: Detected retirement income update requiring prompt")
+                
+                # Generate a prompt asking for retirement income, with specific guidance
+                system_prompt = (
+                    "You are a friendly financial expert helping with retirement planning. "
+                    "Create a brief response that acknowledges the user's request and asks what retirement income "
+                    "amount they'd like to test. Be conversational and clear."
+                )
+
+                user_prompt = (
+                    "Generate a response that follows this pattern: 'Happy to help with that. Different incomes will change "
+                    "how long your super lasts in retirement. What income do you want to test out?'\n\n"
+                    "Keep the same meaning but vary the wording slightly to sound natural."
+                )
+
+                income_prompt = await ask_llm(system_prompt, user_prompt)
+                
+                # Store the prompt and set missing variable
+                state["missing_var"] = "retirement_income"
+                state["data"]["intent"] = "update_variable" 
+                state["data"]["previous_intent"] = "retirement_outcome"  # Remember where we came from
+                state["data"]["last_clarification_prompt"] = income_prompt
+                
+                # Store the original intent if we don't have it yet
+                if not state["data"].get("original_intent"):
+                    state["data"]["original_intent"] = "retirement_outcome"
+                
+                return income_prompt
+
             # Then adjust numeric fields if previous_system_response suggests so.
             if previous_system_response:
                 prev_response_lower = previous_system_response.lower()
@@ -1321,7 +1403,11 @@ async def process_query(user_query: str, previous_system_response: str = "", ful
                 missing_vars.append("current income")
             if state["data"].get("current_income", 0) > 0 and state["data"].get("super_included") is None:
                 missing_vars.append("super_included")
-        if not state["data"].get("retirement_income_option") and not state["data"].get("retirement_income", 0) > 0:
+        # Check specifically for the case where we need retirement_income
+        if state["data"].get("missing_var") == "retirement_income":
+            missing_vars.append("retirement_income")
+        # Otherwise, check for retirement_income_option
+        elif not state["data"].get("retirement_income_option") and not state["data"].get("retirement_income", 0) > 0:
             missing_vars.append("retirement_income_option")
 
     

@@ -186,13 +186,35 @@ async def extract_intent_variables(user_query: str, previous_system_response: st
             ]
             
             if previous_system_response and any(pattern in previous_system_response.lower() for pattern in suggestion_patterns):
-                # Try to determine which suggestion was in the previous response
+                # Special handling for retirement income suggestion
+                retirement_income_pattern = "how different retirement income amounts might affect"
+                if retirement_income_pattern in previous_system_response.lower():
+                    print("DEBUG: Detected affirmative response to retirement income suggestion")
+                    
+                    # Check if the user already provided an income amount in their affirmative response
+                    amount_match = re.search(r'(\d[\d,.]*k?m?)', user_query)
+                    if amount_match:
+                        from backend.main import parse_numeric_with_suffix
+                        income_amount = parse_numeric_with_suffix(amount_match.group(1))
+                        return {
+                            "intent": "update_variable", 
+                            "retirement_income": income_amount,
+                            "retirement_income_option": "custom",
+                            "requires_income_prompt": False
+                        }
+                    else:
+                        # Set intent to update_variable with a special flag to request income
+                        return {
+                            "intent": "update_variable",
+                            "requires_income_prompt": True  # Special flag to indicate we need to ask for income
+                        }
                 
+                # For all other suggestion patterns, process as before
                 for intent, connection in INTENT_CONNECTIONS.items():
                     if connection["prompt"] in previous_system_response:
                         # Return the suggested next intent
                         return {"intent": connection["primary_next"]}
-                
+                    
                 # If we couldn't match a specific connection but it does look like a suggestion,
                 # return a generic affirmative response
                 return {"intent": "affirmative_response"}
@@ -234,6 +256,9 @@ async def extract_intent_variables(user_query: str, previous_system_response: st
             "- CRITICAL: When the previous system response suggests a particular option or intent that the user might be interested in, ALWAYS:\n"
             "  1. Check the previous system response to determine and extract the new intent value\n"
             "  2. If the user response is in the affirmative, store the suggested query as a new intent\n"
+            "- CRITICAL: When the previous system response asks if the user would like to change some of the inputs, like retirement age or income in retirement, ALWAYS:\n"
+            "  1. If the user response is in the affirmative, and enquire as to which input they would like to change or update, then\n"
+            "  2. Extract the new input and overwrite the previous value before rernning the existing intent\n"
             "- CRITICAL: When the user specifies a custom retirement income amount (e.g., 'what if I took $70k instead', 'what about $80,000 per year'), ALWAYS:\n"
             "  1. Extract the numeric value in 'retirement_income'\n"
             "  2. Set 'retirement_income_option' to \"custom\"\n"
@@ -409,6 +434,11 @@ async def handle_next_intent_transition(user_message, context):
     # Set the new intent
     updated_context["intent"] = next_intent
     
+    # Special handling for retirement income modeling
+    if context.get("intent") == "retirement_outcome" and next_intent == "update_variable":
+        updated_context["needs_retirement_income_prompt"] = True
+        updated_context["original_intent"] = "retirement_outcome"
+
     # Remove the suggestion now that we're acting on it
     if "suggested_next_intent" in updated_context:
         del updated_context["suggested_next_intent"]
@@ -512,3 +542,18 @@ def update_calculated_values(state):
     # Update the state with calculated values
     state["data"] = data
     return state
+
+async def generate_income_update_request():
+    """Generate a request for the user to specify a retirement income amount"""
+    system_prompt = (
+        "You are a friendly financial expert helping with retirement planning. "
+        "Create a brief, clear request asking what retirement income amount the user would like to model. "
+        "Keep it concise and conversational."
+    )
+    
+    user_prompt = (
+        "Generate a simple question asking what retirement income amount the user would like to model. "
+        "For example: 'What annual retirement income amount would you like to model?'"
+    )
+    
+    return await ask_llm(system_prompt, user_prompt)

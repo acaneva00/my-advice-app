@@ -592,7 +592,8 @@ async def chat_fn(user_message, history, state, user_info=None):
             "current income": "current_income",
             "desired retirement age": "retirement_age",
             "current fund": "current_fund",
-            "nominated fund": "nominated_fund"
+            "nominated fund": "nominated_fund",
+            "retirement_income": "retirement_income"
         }
     
         expected_var = var_map.get(var_marker, var_marker)
