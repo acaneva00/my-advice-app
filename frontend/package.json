@@ -21,7 +21,9 @@
     "start": "export NODE_OPTIONS=--openssl-legacy-provider && react-scripts start",
     "build": "export NODE_OPTIONS=--openssl-legacy-provider && react-scripts build",
     "test": "react-scripts test",
-    "eject": "react-scripts eject"
+    "eject": "react-scripts eject",
+    "start-api": "cd .. && python -m backend.run_api",
+    "dev": "concurrently \"npm run start\" \"npm run start-api\""
   },
   "eslintConfig": {
     "extends": [
@@ -40,5 +42,5 @@
       "last 1 safari version"
     ]
   },
-  "proxy": "http://localhost:3001"
+  "proxy": "https://shodrbtbckffikvrkffnh.supabase.co"
 }

@@ -16,19 +16,67 @@ const Auth = () => {
   const handleEmailAuth = async (e) => {
     e.preventDefault();
     setLoading(true);
+    setMessage(''); // Clear previous messages
     
     try {
       if (authMode === 'login') {
         // Send magic link
-        const { error } = await signInWithOTP({
-          email,
-          options: {
-            emailRedirectTo: window.location.origin,
-          },
-        });
+        console.log(`Sending magic link to ${email} with redirect to ${window.location.origin}`);
+        
+        try {
+          const { error } = await signInWithOTP({
+            email,
+            options: {
+              emailRedirectTo: `${window.location.origin}`,
+            },
+          });
 
-        if (error) throw error;
-        setMessage('Check your email for the login link!');
+          if (error) {
+            console.error('Magic link error:', error);
+            throw error;
+          }
+          
+          // Check if we're using mock authentication
+          if (process.env.NODE_ENV === 'development') {
+            setMessage('Development mode: Magic link sent! Click the button below to simulate clicking the magic link.');
+            
+            // Add a button to simulate clicking the magic link
+            setTimeout(() => {
+              const mockLinkButton = document.createElement('button');
+              mockLinkButton.textContent = 'Simulate Magic Link';
+              mockLinkButton.style.backgroundColor = '#3EA76F';
+              mockLinkButton.style.color = 'white';
+              mockLinkButton.style.border = 'none';
+              mockLinkButton.style.borderRadius = '4px';
+              mockLinkButton.style.padding = '0.5rem 1rem';
+              mockLinkButton.style.marginTop = '1rem';
+              mockLinkButton.style.cursor = 'pointer';
+              
+              mockLinkButton.onclick = () => {
+                // Simulate clicking the magic link by redirecting to a URL with a hash fragment
+                window.location.href = `${window.location.origin}/#mock_auth=true&email=${encodeURIComponent(email)}`;
+              };
+              
+              const messageDiv = document.querySelector('[data-testid="message-container"]');
+              if (messageDiv) {
+                messageDiv.appendChild(mockLinkButton);
+              }
+            }, 100);
+          } else {
+            setMessage('Check your email for the login link!');
+          }
+          
+          console.log('Magic link sent successfully');
+        } catch (fetchError) {
+          console.error('Fetch error details:', fetchError);
+          
+          // More detailed error message
+          if (fetchError.message === 'Failed to fetch') {
+            setMessage('Network error: Failed to connect to authentication service. Please check your internet connection and try again.');
+          } else {
+            throw fetchError;
+          }
+        }
       } else {
         // Sign up flow
         const { error } = await signInWithOTP({
@@ -94,7 +142,10 @@ const Auth = () => {
         </h2>
 
         {message && (
-          <div style={{ padding: '1rem', backgroundColor: '#f0f9ff', borderRadius: '4px', marginBottom: '1rem', color: '#0369a1' }}>
+          <div 
+            data-testid="message-container"
+            style={{ padding: '1rem', backgroundColor: '#f0f9ff', borderRadius: '4px', marginBottom: '1rem', color: '#0369a1' }}
+          >
             {message}
           </div>
         )}

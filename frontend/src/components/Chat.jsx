@@ -69,24 +69,45 @@ const scrollToBottom = () => {
     setLoading(true);
     
     try {
-      // Demo implementation - simulate a response
-      setTimeout(() => {
-        const assistantMessage = {
-          id: Date.now().toString() + '1',
-          sender_type: 'assistant',
-          content: "I'm your financial assistant, but I'm currently in demo mode. In a real implementation, I would process your message through the backend API.",
-          sent_at: new Date().toISOString()
-        };
-        setMessages(prev => [...prev, assistantMessage]);
-        setLoading(false);
-      }, 1000);
+      // Get the previous system response (if any)
+      const previousSystemResponse = messages.length > 0 
+        ? messages.filter(m => m.sender_type === 'assistant').pop()?.content || ""
+        : "";
       
-      // In a real implementation:
-      // const response = await fetch('/api/chat/message', {...});
-      // const processResponse = await fetch('/api/chat/process', {...});
-      // const responseData = await processResponse.json();
+      // Get the full chat history
+      const fullHistory = messages.map(m => 
+        `${m.sender_type === 'user' ? 'User' : 'Assistant'}: ${m.content}`
+      ).join('\n');
+      
+      // Call the backend API
+      const response = await fetch('/api/chat/process', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          user_query: newMessage,
+          previous_system_response: previousSystemResponse,
+          full_history: fullHistory,
+          user_id: user?.id || 'anonymous'
+        }),
+      });
+      
+      if (!response.ok) {
+        throw new Error(`API error: ${response.status}`);
+      }
+      
+      const responseData = await response.json();
+      
       // Add the assistant's response to the UI
+      const assistantMessage = {
+        id: Date.now().toString() + '1',
+        sender_type: 'assistant',
+        content: responseData.response || "I'm sorry, I couldn't process your request.",
+        sent_at: new Date().toISOString()
+      };
       
+      setMessages(prev => [...prev, assistantMessage]);
     } catch (error) {
       console.error('Error sending/processing message:', error);
       setLoading(false);
