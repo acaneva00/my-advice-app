@@ -1,7 +1,7 @@
 import gradio as gr
 from backend.main import process_query, parse_numeric_with_suffix, validate_response, get_clarification_prompt, df
 from backend.helper import ask_llm, get_unified_variable_response, update_calculated_values, extract_intent_variables
-from backend.utils import match_fund_name
+from backend.utils import match_fund_name, convert_variable_type, VARIABLE_TYPE_MAP
 from backend.cashflow import calculate_income_net_of_super, calculate_after_tax_income
 from backend.supabase.chatService import ChatService
 from flask import Flask, request, jsonify
@@ -295,6 +295,14 @@ async def update_user_financial_profile(user_id, state_data):
             print("Skipping database update for local user")
             return
         
+        # Convert all values to proper types before sending to database
+        converted_data = {}
+        for key, value in state_data.items():
+            if key in VARIABLE_TYPE_MAP:
+                converted_data[key] = convert_variable_type(key, value)
+            else:
+                converted_data[key] = value
+
         response = await supabase_client.post(
             "/rest/v1/rpc/update_financial_profile",
             json={
@@ -336,20 +344,28 @@ async def record_user_intent(user_id, session_id, intent_type, state_data):
             print("Skipping intent recording for local user/session or unknown intent")
             return
         
-        # Prepare intent data
+        # Convert all data to proper types before recording intent
+        converted_data = {}
+        for key, value in state_data.items():
+            if key in VARIABLE_TYPE_MAP:
+                converted_data[key] = convert_variable_type(key, value)
+            else:
+                converted_data[key] = value
+        
+        # Prepare intent data with converted values
         intent_data = {
-            "current_age": state_data.get("current_age"),
-            "current_balance": state_data.get("current_balance"),
-            "current_income": state_data.get("current_income"),
-            "retirement_age": state_data.get("retirement_age"),
-            "current_fund": state_data.get("current_fund"),
-            "super_included": state_data.get("super_included"),
-            "income_net_of_super": state_data.get("income_net_of_super"),
-            "after_tax_income": state_data.get("after_tax_income"),
-            "retirement_balance": state_data.get("retirement_balance"),
-            "retirement_income": state_data.get("retirement_income"),
-            "retirement_income_option": state_data.get("retirement_income_option"),
-            "retirement_drawdown_age": state_data.get("retirement_drawdown_age")
+            "current_age": converted_data.get("current_age"),
+            "current_balance": converted_data.get("current_balance"),
+            "current_income": converted_data.get("current_income"),
+            "retirement_age": converted_data.get("retirement_age"),
+            "current_fund": converted_data.get("current_fund"),
+            "super_included": converted_data.get("super_included"),
+            "income_net_of_super": converted_data.get("income_net_of_super"),
+            "after_tax_income": converted_data.get("after_tax_income"),
+            "retirement_balance": converted_data.get("retirement_balance"),
+            "retirement_income": converted_data.get("retirement_income"),
+            "retirement_income_option": converted_data.get("retirement_income_option"),
+            "retirement_drawdown_age": converted_data.get("retirement_drawdown_age")
         }
         
         response = await supabase_client.post(
@@ -403,7 +419,7 @@ async def extract_variable_from_response(last_prompt: str, user_message: str, co
     }
     
     # Define which variables should be treated as booleans
-    boolean_vars = ["super_included"]
+    boolean_vars = ["super_included", "homeowner_status"]
 
     expected_var = var_map.get(missing_var, missing_var)
 
@@ -447,52 +463,40 @@ async def extract_variable_from_response(last_prompt: str, user_message: str, co
             print(f"DEBUG: Extracted variable {data.get('variable')} doesn't match expected {expected_var}")
             return {'variable': expected_var, 'value': None}
         
-        # Convert values to appropriate type
+        # Replace all the type conversion logic with the centralized function
         raw_value = data.get('value')
-        if raw_value and expected_var in numeric_vars:
-            try:
-                if isinstance(raw_value, str):
-                    # Remove any currency symbols and commas
-                    clean_value = raw_value.replace('$', '').replace(',', '').strip().lower()
+        if raw_value is not None:
+            # Convert the value using our central conversion utility
+            converted_value = convert_variable_type(expected_var, raw_value)
+            
+            # If conversion failed (returned None) but we had a value, try LLM interpretation for booleans
+            if converted_value is None and expected_var in boolean_vars:
+                try:
+                    if expected_var == "homeowner_status":
+                        interpret_prompt = f"Based on this response, does the user own their home or rent? Response: '{raw_value}'"
+                        interpretation = await ask_llm("Answer with ONLY 'own' or 'rent'.", interpret_prompt)
+                        converted_value = interpretation.lower().strip() == "own"
+                    elif expected_var == "super_included":
+                        interpret_prompt = f"Does this response indicate that super is INCLUDED in the income amount or PAID ON TOP? Response: '{raw_value}'"
+                        interpretation = await ask_llm("You are a boolean interpreter. Answer with ONLY 'included' or 'on top'.", interpret_prompt)
+                        converted_value = interpretation.lower().strip() == "included"
+                except Exception as e:
+                    print(f"DEBUG: Error using LLM to interpret ambiguous value: {e}")
                     
-                    # Handle suffixes for monetary values
-                    if expected_var in ['current_balance', 'current_income']:
-                        if clean_value.endswith('k'):
-                            numeric_value = float(clean_value[:-1]) * 1000
-                        elif clean_value.endswith('m'):
-                            numeric_value = float(clean_value[:-1]) * 1000000
-                        else:
-                            numeric_value = float(clean_value)
-                    else:
-                        # For ages, just convert to integer
-                        numeric_value = int(float(clean_value))
+            # Handle fund name standardization separately since it's a special case
+            if expected_var in ["current_fund", "nominated_fund"] and isinstance(converted_value, str):
+                standardized = match_fund_name(converted_value, df)
+                if standardized:
+                    converted_value = standardized
                     
-                    # Convert to int if required
-                    if numeric_vars[expected_var] == "int":
-                        numeric_value = int(numeric_value)
-                    
-                    data['value'] = numeric_value
-                    print(f"DEBUG: Converted {raw_value} to {numeric_value} for {expected_var}")
-                    
-            except ValueError:
-                print(f"DEBUG: Could not convert value {raw_value} to number")
+            # Update the value in our data
+            data['value'] = converted_value
+            print(f"DEBUG: Converted {raw_value} to {converted_value} for {expected_var}")
+            
+            # If conversion completely failed, return None
+            if converted_value is None:
+                print(f"DEBUG: Could not convert value {raw_value} for {expected_var}")
                 return {'variable': expected_var, 'value': None}
-        
-        # Add handling for boolean responses
-        if expected_var in boolean_vars:
-            if isinstance(raw_value, str):
-                raw_value = raw_value.lower().strip()
-                if raw_value in ["yes", "true", "included", "includes", "part of", "package"]:
-                    data['value'] = True
-                elif raw_value in ["no", "false", "not included", "separate", "on top", "additional"]:
-                    data['value'] = False
-                else:
-                    # Try to use LLM to interpret ambiguous responses
-                    interpret_prompt = f"Does this response indicate that super is INCLUDED in the income amount or PAID ON TOP? Response: '{raw_value}'"
-                    interpretation = await ask_llm("You are a boolean interpreter. Answer with ONLY 'included' or 'on top'.", interpret_prompt)
-                    data['value'] = interpretation.lower().strip() == "included"
-            elif isinstance(raw_value, bool):
-                data['value'] = raw_value
 
         # Handle retirement income option
         if expected_var == "retirement_income_option":
@@ -643,9 +647,12 @@ async def chat_fn(user_message, history, state, user_info=None):
                 if standardized:
                     raw_value = standardized
 
-            # Update state with the raw value
-            state["data"][var_key] = raw_value
-            print(f"DEBUG app.py: Updated state with {var_key}: {raw_value}")
+            # Convert to appropriate type
+            converted_value = convert_variable_type(var_key, raw_value)
+            
+            # Update state with the converted value
+            state["data"][var_key] = converted_value
+            print(f"DEBUG app.py: Updated state with {var_key}: {converted_value} (converted from {raw_value})")
 
             # If we also extracted a retirement income amount, save that too
             if extraction.get("retirement_income") is not None:

@@ -159,7 +159,7 @@ def get_variable_description(var_key: str) -> str:
     }
     return descriptions.get(var_key, var_key)
 
-async def extract_intent_variables(user_query: str, previous_system_response: str = "") -> dict:
+async def extract_intent_variables(user_query: str, previous_system_response: str = "", in_variable_collection: bool = False) -> dict:
     """
     Uses the LLM to extract key variables from a user query and the most recent system response.
     Expected output is a JSON object with the following keys:
@@ -255,7 +255,7 @@ async def extract_intent_variables(user_query: str, previous_system_response: st
             " - cash_assets: cash and term deposits\n"
             " - share_investments: value of shares and managed investments\n"
             " - investment_properties: value of investment real estate\n"
-            " - non_financial_assets: value of non-financial assets (vehicles, jewelry, boats, etc.)\n\n"
+            " - non_financial_assets: a summary or total value representing the combined value of assets like vehicles, jewelry, boats, etc.)\n\n"
             "For numeric values:\n"            
             "- Convert k/K to thousands (e.g., 150k = 150000)\n"
             "- Convert m/M to millions (e.g., 1.5m = 1500000)\n"
@@ -280,6 +280,9 @@ async def extract_intent_variables(user_query: str, previous_system_response: st
             "  2. Do NOT set retirement_age to be the raw number of years mentioned\n"
             "  3. For example, if current retirement age is 65 and user says 'delay by 2 years', set retirement_age to 67, not 2\n"
             "  4. NEVER set retirement_age to be younger than current_age\n"
+            "CRITICAL: When responding to variable collection prompts (homeowner status, relationship status, etc.) during intent workflows, maintain the ORIGINAL intent and do not interpret as update_variable.\n"
+            "CRITICAL: If the user is answering a direct question about their status or preferences as part of a collection flow, maintain the parent intent.\n"
+            "CRITICAL: When the system's most recent response is asking for a specific piece of information (age, balance, etc.) and the user replies with just a value (like '20000' or '5000'), do NOT classify this as 'update_variable'.\n"
             "- If the user is asking a 'what if' question that changes a specific variable (e.g., 'what if I retire at 67', 'what if my income was $75k'), "
             "- set intent to 'update_variable' and extract the modified variable value, including updating 'retirement_income_option' to \"custom\" when appropriate, "
             "- and leave all other variables unchanged. \n\n"

@@ -8,6 +8,8 @@ from openai import OpenAI
 from backend.charts import generate_fee_bar_chart
 from backend.cashflow import calculate_income_net_of_super, calculate_after_tax_income
 from backend.utils import (
+    VARIABLE_TYPE_MAP,
+    convert_variable_type, 
     parse_age_from_query,
     parse_balance_from_query,
     compute_fee_breakdown,
@@ -1147,8 +1149,10 @@ async def process_query(user_query: str, previous_system_response: str = "", ful
     else:
         # Only run intent extraction if we're not collecting variables
         if not state.get("missing_var"):
-            # Run initial extraction.
-            extracted = await extract_intent_variables(user_query, previous_system_response)
+            # Check if we're in a variable collection context
+            in_collection = state.get("missing_var") is not None or state.get("data", {}).get("last_var") is not None
+            # Run initial extraction with context flag
+            extracted = await extract_intent_variables(user_query, previous_system_response, in_collection)
             
             # Special handling for retirement income update that requires a prompt
             if extracted.get("intent") == "update_variable" and extracted.get("requires_income_prompt"):

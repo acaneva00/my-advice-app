@@ -6,6 +6,127 @@ import openai
 from openai import OpenAI
 from backend.cashflow import calculate_income_net_of_super, calculate_after_tax_income
 
+VARIABLE_TYPE_MAP = {
+    # Boolean variables
+    "super_included": {"type": "boolean", "true_values": ["yes", "true", "included", "includes", "part of", "package"],
+                      "false_values": ["no", "false", "not included", "separate", "on top", "additional"]},
+    "homeowner_status": {"type": "boolean", "true_values": ["own", "yes", "homeowner", "i own", "own home", "true"],
+                        "false_values": ["rent", "no", "renting", "i rent", "tenant", "false"]},
+    
+    # Integer variables
+    "current_age": {"type": "integer"},
+    "retirement_age": {"type": "integer"},
+    "retirement_drawdown_age": {"type": "integer"},
+    
+    # Float/Currency variables
+    "current_balance": {"type": "currency"},
+    "current_income": {"type": "currency"},
+    "income_net_of_super": {"type": "currency"},
+    "after_tax_income": {"type": "currency"},
+    "retirement_balance": {"type": "currency"},
+    "retirement_income": {"type": "currency"},
+    "cash_assets": {"type": "currency"},
+    "share_investments": {"type": "currency"},
+    "investment_properties": {"type": "currency"},
+    "non_financial_assets": {"type": "currency"},
+    
+    # String enum variables
+    "relationship_status": {"type": "enum", "values": ["single", "couple"]},
+    "retirement_income_option": {"type": "enum", 
+                               "values": ["same_as_current", "modest_single", "modest_couple", 
+                                         "comfortable_single", "comfortable_couple", "custom"]},
+    
+    # String variables (no conversion needed)
+    "current_fund": {"type": "string"},
+    "nominated_fund": {"type": "string"}
+}
+
+def convert_variable_type(variable_name, value):
+    """
+    Convert a variable to its correct type based on the VARIABLE_TYPE_MAP.
+    
+    Args:
+        variable_name: The name of the variable
+        value: The raw value to convert
+        
+    Returns:
+        The converted value with the correct type
+    """
+    if value is None:
+        return None
+        
+    # Get type info from the map
+    type_info = VARIABLE_TYPE_MAP.get(variable_name)
+    if not type_info:
+        return value  # No conversion info available
+    
+    var_type = type_info.get("type")
+    
+    # Handle different types
+    if var_type == "boolean":
+        if isinstance(value, bool):
+            return value
+        elif isinstance(value, str):
+            value_lower = value.lower().strip()
+            # Check true values
+            for true_value in type_info.get("true_values", []):
+                if true_value in value_lower:
+                    return True
+            # Check false values
+            for false_value in type_info.get("false_values", []):
+                if false_value in value_lower:
+                    return False
+            # Default to None if unclear
+            return None
+    
+    elif var_type == "integer":
+        try:
+            if isinstance(value, str):
+                # Remove any non-numeric characters except decimals
+                clean_value = ''.join(c for c in value if c.isdigit() or c == '.')
+                return int(float(clean_value))
+            elif isinstance(value, (int, float)):
+                return int(value)
+        except (ValueError, TypeError):
+            return None
+    
+    elif var_type == "currency":
+        try:
+            if isinstance(value, str):
+                # Remove currency symbols and commas
+                clean_value = value.replace('$', '').replace(',', '').strip().lower()
+                
+                # Handle suffixes
+                if clean_value.endswith('k'):
+                    return float(clean_value[:-1]) * 1000
+                elif clean_value.endswith('m'):
+                    return float(clean_value[:-1]) * 1000000
+                else:
+                    return float(clean_value)
+            elif isinstance(value, (int, float)):
+                return float(value)
+        except (ValueError, TypeError):
+            return None
+    
+    elif var_type == "enum":
+        if isinstance(value, str):
+            value_lower = value.lower().strip()
+            valid_values = type_info.get("values", [])
+            
+            # Exact match
+            if value_lower in valid_values:
+                return value_lower
+                
+            # Partial match
+            for valid_value in valid_values:
+                if valid_value in value_lower or value_lower in valid_value:
+                    return valid_value
+        
+        # If no match, return original
+        return value
+    
+    # Default: return original value
+    return value
 
 def filter_dataframe_by_fund_name(df, fund_name, exact_match=False):
     """
