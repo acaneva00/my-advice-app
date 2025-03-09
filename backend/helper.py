@@ -93,12 +93,12 @@ async def get_unified_variable_response(var_key: str, raw_value, context: dict, 
     # Define intent acknowledgments
     intent_messages = {
         "project_balance": "Happy to help you figure out how much super you'll have at retirement.",
-        "compare_fees_nominated": "I'll help you compare the fees between your super fund and a comparison fund.",
-        "compare_fees_all": "I'll analyze how your fund's fees compare to others.",
-        "find_cheapest": "I'll help you find the super fund with the lowest fees.",
-        "compare_balance_projection": "I'll compare the projected retirement balances between two funds.",
-        "retirement_outcome": "I'll help you understand how long your retirement savings might last.",
-        "unknown": "I'll help you with your super query."
+        "compare_fees_nominated": "Ok. I will compare fees between your super fund and a comparison fund.",
+        "compare_fees_all": "Sure. Let me analyze how your fund fees compare to others.",
+        "find_cheapest": "No problems. I will help you find the super fund with the lowest fees.",
+        "compare_balance_projection": "Of course. I will compare the projected retirement balances between two funds.",
+        "retirement_outcome": "Happy to help you understand how long your retirement savings might last.",
+        "unknown": "I can help you with your super query."
     }
     
     system_prompt = (
@@ -149,7 +149,13 @@ def get_variable_description(var_key: str) -> str:
         "income_net_of_super": "income excluding super contributions",
         "retirement_balance": "expected balance at retirement",
         "retirement_income_option": "preferred income option in retirement",
-        "retirement_income": "desired annual income in retirement"
+        "retirement_income": "desired annual income in retirement",
+        "relationship_status": "relationship status (single or couple)",
+        "homeowner_status": "whether you own your home or rent",
+        "cash_assets": "value of cash, savings accounts and term deposits",
+        "share_investments": "value of shares and managed investments",
+        "investment_properties": "value of investment properties",
+        "non_financial_assets": "value of non-financial assets like vehicles, jewelry, boats, etc."
     }
     return descriptions.get(var_key, var_key)
 
@@ -231,6 +237,7 @@ async def extract_intent_variables(user_query: str, previous_system_response: st
             "     * \"find_cheapest\": when looking for the lowest fee fund\n"
             "     * \"compare_balance_projection\": when comparing projected balances between funds\n"
             "     * \"update_variable\": when the user wants to update a variable and re-run the previous calculation, like \"what if I retire at 67\" or \"what if my income was $75k\"\n"
+            "     * \"calculate_age_pension\": when the user wants to estimate their age pension entitlement, or asks how much age pension they might get, or wants to understand if they qualify for age pension\n"
             "     * \"unknown\": if no other intent matches\n\n"            
             " - current_fund: the name of the user's current super fund, if mentioned\n"
             " - nominated_fund: the name of the fund the user wishes to compare against, if mentioned by the user or in the previous system response\n"
@@ -242,7 +249,13 @@ async def extract_intent_variables(user_query: str, previous_system_response: st
             " - income_net_of_super: the income excluding superannuation contributions\n"
             " - retirement_balance: their balance at retirement, if mentioned\n"
             " - retirement_income_option: one of \"same_as_current\", \"modest_single\", \"modest_couple\", \"comfortable_single\", \"comfortable_couple\", or \"custom\" if mentioned\n"
-            " - retirement_income: a custom retirement income amount if specified\n\n"
+            " - retirement_income: a custom retirement income amount if specified\n"
+            " - relationship_status: \"single\" or \"couple\" if mentioned\n"
+            " - homeowner_status: true if they own their home, false if they rent or don't own\n"
+            " - cash_assets: cash and term deposits\n"
+            " - share_investments: value of shares and managed investments\n"
+            " - investment_properties: value of investment real estate\n"
+            " - non_financial_assets: value of non-financial assets (vehicles, jewelry, boats, etc.)\n\n"
             "For numeric values:\n"            
             "- Convert k/K to thousands (e.g., 150k = 150000)\n"
             "- Convert m/M to millions (e.g., 1.5m = 1500000)\n"

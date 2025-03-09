@@ -1,6 +1,6 @@
 import os
 import re
-import openai
+from openai import OpenAI  # Updated import for v1.0.0+
 import pandas as pd
 from backend.constants import economic_assumptions
 from typing import Union, Tuple
@@ -28,6 +28,7 @@ from backend.helper import (
     ask_llm, 
     update_calculated_values,
     get_next_intent_info,
+    generate_income_update_request,
     handle_next_intent_transition,
     is_affirmative_response
 )
@@ -65,6 +66,7 @@ SYSTEM_PROMPTS = {
     """
 }
 
+openai_client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
 # Check for OpenAI API key
 if not os.environ.get("OPENAI_API_KEY"):
     raise ValueError("OPENAI_API_KEY environment variable is not set")
@@ -897,6 +899,98 @@ async def process_update_variable(context: dict) -> str:
     else:
         return "I'm not sure which calculation you'd like to update. Could you please provide a complete query?"
 
+async def process_calculate_age_pension(context: dict) -> str:
+    """Process calculate_age_pension intent with the given context."""
+    user_age = context["current_age"]
+    relationship_status = context["relationship_status"]
+    homeowner_status = context["homeowner_status"]
+    
+    # Calculate total financial assets
+    super_balance = context["current_balance"] 
+    cash_assets = context["cash_assets"]
+    share_investments = context["share_investments"]
+    investment_properties = context["investment_properties"]
+    non_financial_assets = context["non_financial_assets"]
+    
+    # Sum up financial assets for deeming
+    financial_assets = super_balance + cash_assets + share_investments
+    
+    # Calculate total assets for the assets test
+    total_assets = financial_assets + investment_properties + non_financial_assets
+    
+    # Get income
+    current_income = context["current_income"]
+    
+    # Check if person is of pension age (currently 67)
+    if user_age < 67:
+        years_until_pension = 67 - user_age
+        return f"Based on your current age of {user_age}, you're not yet eligible for the Age Pension. Eligibility begins at age 67, which is {years_until_pension} years away for you. Would you like to see what you might be eligible for when you reach pension age?"
+    
+    # Get income (use income_net_of_super instead of current_income)
+    income_for_assessment = context.get("income_net_of_super", 0)
+    if not income_for_assessment and context.get("current_income"):
+        # Calculate if not already available
+        super_included = context.get("super_included", False)
+        employer_rate = economic_assumptions["EMPLOYER_CONTRIBUTION_RATE"]
+        income_for_assessment = calculate_income_net_of_super(
+            context["current_income"], super_included, employer_rate)
+
+    # Calculate pension amount
+    pension_result = calculate_age_pension(
+        relationship_status,
+        homeowner_status,
+        total_assets,
+        current_income,
+        financial_assets
+    )
+    
+    next_intent, suggestion_prompt = get_next_intent_info("calculate_age_pension")
+    context.setdefault('data', {})['suggested_next_intent'] = next_intent
+    
+    # Format values for display
+    annual_pension = pension_result["annual_pension"]
+    fortnightly_pension = pension_result["fortnightly_pension"]
+    determining_test = pension_result["determining_test"]
+    max_pension = pension_result["max_pension_annual"]
+    percentage_of_max = (annual_pension / max_pension) * 100 if max_pension > 0 else 0
+    
+    user_prompt = (
+        f"Data:\n"
+        f"Current age: {user_age}\n"
+        f"Relationship status: {relationship_status}\n"
+        f"Homeowner status: {'Homeowner' if homeowner_status else 'Non-homeowner'}\n"
+        f"Super balance: ${super_balance:,.2f}\n"
+        f"Cash and term deposits: ${cash_assets:,.2f}\n"
+        f"Shares and managed investments: ${share_investments:,.2f}\n"
+        f"Investment properties: ${investment_properties:,.2f}\n"
+        f"Non-financial assets: ${non_financial_assets:,.2f}\n"
+        f"Total assessable assets: ${total_assets:,.2f}\n"
+        f"Financial assets for deeming: ${financial_assets:,.2f}\n"
+        f"Current income: ${current_income:,.2f}/year\n"
+        f"Annual pension: ${annual_pension:,.2f}\n"
+        f"Fortnightly pension: ${fortnightly_pension:,.2f}\n"
+        f"Maximum possible pension: ${max_pension:,.2f}/year\n"
+        f"Percentage of maximum: {percentage_of_max:.1f}%\n"
+        f"Determining test: {determining_test.title()} Test\n"
+        f"Suggestion prompt: {suggestion_prompt}"
+    )
+    
+    system_prompt = (
+        "You are a financial expert specializing in Australian retirement benefits. "
+        "Based solely on the data provided, produce a response that follows this format:\n\n"
+        "First paragraph: State their estimated Age Pension entitlement in both annual and fortnightly terms. "
+        "Also note what percentage of the maximum pension this represents.\n\n"
+        "Second paragraph: Explain which test determined their pension amount (assets test or income test) "
+        "and what this means in simple terms.\n\n"
+        "Third paragraph: Provide one brief, specific tip relevant to their situation that might help increase "
+        "their pension eligibility (e.g., reviewing asset allocation if assets test limited).\n\n"
+        "Final paragraph: Use exactly the suggestion prompt provided in the data to ask about the next steps. "
+        "Do not modify the suggestion prompt text.\n\n"
+        "Keep your response friendly, clear, and focused, with no extraneous information or caveats."
+    )
+    
+    return await ask_llm(system_prompt, user_prompt)
+
 async def process_default_comparison(context: dict) -> str:
     """Process default comparison when no specific intent is matched."""
     user_age = context["current_age"]
@@ -963,6 +1057,8 @@ async def process_intent(intent: str, context: dict) -> str:
             response = await process_retirement_outcome(context)
         elif intent == "update_variable":
             response = await process_update_variable(context)
+        elif intent == "calculate_age_pension":
+            response = await process_calculate_age_pension(context)
         else:
             response = await process_default_comparison(context)
         
@@ -1296,13 +1392,19 @@ async def process_query(user_query: str, previous_system_response: str = "", ful
         "after_tax_income": state["data"].get("after_tax_income"), 
         "retirement_balance": state["data"].get("retirement_balance"),
         "retirement_drawdown_age": state["data"].get("retirement_drawdown_age"),
+        "relationship_status": state["data"].get("relationship_status"),
+        "homeowner_status": state["data"].get("homeowner_status"),
+        "cash_assets": state["data"].get("cash_assets", 0) or None,
+        "share_investments": state["data"].get("share_investments", 0) or None,
+        "investment_properties": state["data"].get("investment_properties", 0) or None,
+        "non_financial_assets": state["data"].get("non_financial_assets", 0) or None,
         "intent": intent,
         "previous_intent": state["data"].get("previous_intent"),
         "original_intent": state["data"].get("original_intent"),  
         "is_new_intent": is_new_intent,
         "previous_var": state["data"].get("last_var"),
         "user_query": user_query 
-}
+    }
     
     # For update_variable intent, store the entire previous state data for reference
     if intent == "update_variable":
@@ -1410,6 +1512,26 @@ async def process_query(user_query: str, previous_system_response: str = "", ful
         elif not state["data"].get("retirement_income_option") and not state["data"].get("retirement_income", 0) > 0:
             missing_vars.append("retirement_income_option")
 
+    # For calculate_age_pension
+    if intent == "calculate_age_pension":
+        if not state["data"].get("current_age"):
+            missing_vars.append("age")
+        if state["data"].get("relationship_status") is None:
+            missing_vars.append("relationship_status")
+        if state["data"].get("homeowner_status") is None:
+            missing_vars.append("homeowner_status")
+        if not state["data"].get("current_balance"):
+            missing_vars.append("super balance")
+        if not state["data"].get("cash_assets"):
+            missing_vars.append("cash_assets")
+        if not state["data"].get("share_investments"):
+            missing_vars.append("share_investments")
+        if not state["data"].get("investment_properties"):
+            missing_vars.append("investment_properties")
+        if not state["data"].get("non_financial_assets"):
+            missing_vars.append("non_financial_assets")
+        if not state["data"].get("current_income"):
+            missing_vars.append("current income")
     
     # If any variables are missing, generate a structured prompt using the LLM
     if missing_vars:

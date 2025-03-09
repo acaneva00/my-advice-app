@@ -416,3 +416,82 @@ def get_asfa_standards() -> dict:
             "description": "Good standard of living for couples with private health insurance, more leisure activities, and newer cars"
         }
     }
+
+def calculate_age_pension(
+    relationship_status: str,  # "single" or "couple"
+    homeowner_status: bool,    # True for homeowner, False for non-homeowner
+    total_assets: float,       # Total assets excluding principal residence if homeowner
+    current_income: float,     # Employment income (not deemed)
+    financial_assets: float    # Financial assets for deeming (cash, investments, super)
+) -> dict:
+    """
+    Calculate Australian Age Pension based on assets test and income test.
+    Returns both tests results and the lower amount (which is what gets paid).
+    All monetary amounts are in annual terms.
+    """
+    from backend.constants import age_pension_params
+    
+    # Convert to fortnightly amounts for calculations
+    max_pension = age_pension_params["MAX_PENSION_SINGLE"] if relationship_status == "single" else age_pension_params["MAX_PENSION_COUPLE"]
+    max_pension_fortnight = max_pension / 26
+    current_income_fortnight = current_income / 26  # Changed from other_income
+    
+    # Determine assets thresholds based on relationship and homeowner status
+    if relationship_status == "single":
+        if homeowner_status:
+            assets_threshold = age_pension_params["ASSETS_THRESHOLD_HOMEOWNER_SINGLE"]
+        else:
+            assets_threshold = age_pension_params["ASSETS_THRESHOLD_NON_HOMEOWNER_SINGLE"]
+    else:  # couple
+        if homeowner_status:
+            assets_threshold = age_pension_params["ASSETS_THRESHOLD_HOMEOWNER_COUPLE"]
+        else:
+            assets_threshold = age_pension_params["ASSETS_THRESHOLD_NON_HOMEOWNER_COUPLE"]
+    
+    # Calculate deemed income
+    if relationship_status == "single":
+        deeming_threshold = age_pension_params["DEEMING_THRESHOLD_SINGLE"]
+    else:
+        deeming_threshold = age_pension_params["DEEMING_THRESHOLD_COUPLE"]
+    
+    if financial_assets <= deeming_threshold:
+        deemed_income = financial_assets * age_pension_params["DEEMING_RATE_LOWER"]
+    else:
+        deemed_income = (deeming_threshold * age_pension_params["DEEMING_RATE_LOWER"]) + \
+                        ((financial_assets - deeming_threshold) * age_pension_params["DEEMING_RATE_HIGHER"])
+    
+    # Convert deemed income to fortnightly
+    deemed_income_fortnight = deemed_income / 26
+    
+    # Total assessable income (fortnightly)
+    total_income_fortnight = current_income_fortnight + deemed_income_fortnight
+    
+    # Income test
+    income_threshold = age_pension_params["INCOME_THRESHOLD_SINGLE"] if relationship_status == "single" else age_pension_params["INCOME_THRESHOLD_COUPLE"]
+    
+    if total_income_fortnight <= income_threshold:
+        income_test_pension = max_pension_fortnight
+    else:
+        reduction = (total_income_fortnight - income_threshold) * age_pension_params["INCOME_TAPER_RATE"]
+        income_test_pension = max(0, max_pension_fortnight - reduction)
+    
+    # Assets test
+    if total_assets <= assets_threshold:
+        assets_test_pension = max_pension_fortnight
+    else:
+        reduction = (total_assets - assets_threshold) * age_pension_params["ASSETS_TAPER_RATE"]
+        assets_test_pension = max(0, max_pension_fortnight - reduction)
+    
+    # The lower of the two tests applies
+    pension_fortnight = min(income_test_pension, assets_test_pension)
+    annual_pension = pension_fortnight * 26
+    
+    return {
+        "annual_pension": annual_pension,
+        "fortnightly_pension": pension_fortnight,
+        "income_test_pension_annual": income_test_pension * 26,
+        "assets_test_pension_annual": assets_test_pension * 26,
+        "determining_test": "income" if income_test_pension <= assets_test_pension else "assets",
+        "deemed_income_annual": deemed_income,
+        "max_pension_annual": max_pension
+    }

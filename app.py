@@ -310,7 +310,13 @@ async def update_user_financial_profile(user_id, state_data):
                 "p_income_net_of_super": state_data.get("income_net_of_super"),
                 "p_after_tax_income": state_data.get("after_tax_income"),
                 "p_retirement_balance": state_data.get("retirement_balance"),
-                "p_retirement_drawdown_age": state_data.get("retirement_drawdown_age")
+                "p_retirement_drawdown_age": state_data.get("retirement_drawdown_age"),
+                "p_relationship_status": state_data.get("relationship_status"),
+                "p_homeowner_status": state_data.get("homeowner_status"),
+                "p_cash_assets": state_data.get("cash_assets"),
+                "p_share_investments": state_data.get("share_investments"),
+                "p_investment_properties": state_data.get("investment_properties"),
+                "p_non_financial_assets": state_data.get("non_financial_assets")
             }
         )
         
@@ -593,7 +599,13 @@ async def chat_fn(user_message, history, state, user_info=None):
             "desired retirement age": "retirement_age",
             "current fund": "current_fund",
             "nominated fund": "nominated_fund",
-            "retirement_income": "retirement_income"
+            "retirement_income": "retirement_income",
+            "relationship_status": "relationship_status",
+            "homeowner_status": "homeowner_status",
+            "cash_assets": "cash_assets",
+            "share_investments": "share_investments",
+            "investment_properties": "investment_properties",
+            "non_financial_assets": "non_financial_assets"
         }
     
         expected_var = var_map.get(var_marker, var_marker)
@@ -644,58 +656,20 @@ async def chat_fn(user_message, history, state, user_info=None):
             state = update_calculated_values(state)
             print(f"DEBUG app.py: Updated calculated values in state: {state}")
             
-            # Format value for acknowledgment
-            formatted_value = f"${raw_value:,.0f}" if var_key in ["current_balance", "current_income"] else raw_value
-
-            # Check for remaining missing variables
-            missing_vars = []
-            if state["data"].get("current_age", 0) <= 0:
-                missing_vars.append("age")
-            if state["data"].get("current_balance", 0) <= 0:
-                missing_vars.append("super balance")
-            if state["data"].get("intent") not in ["find_cheapest"] and not state["data"].get("current_fund"):
-                missing_vars.append("current fund")
-            if state["data"].get("intent") == "compare_fees_nominated" and not state["data"].get("nominated_fund"):
-                missing_vars.append("nominated fund")
-            if state["data"].get("intent") in ["project_balance", "compare_balance_projection"]:
-                if state["data"].get("retirement_age", 0) <= state["data"].get("current_age", 0):
-                    missing_vars.append("desired retirement age")
-                if state["data"].get("current_income", 0) <= 0:
-                    missing_vars.append("current income")
-            if state["data"].get("current_income", 0) > 0 and state["data"].get("super_included") is None:
-                missing_vars.append("super_included")
+            # After extracting the variable, get the next missing variables from main.py
+            previous_system_response = next((msg["content"] for msg in reversed(internal_history) if msg["role"] == "assistant"), "")
+            full_history = " ".join(msg["content"] for msg in internal_history if msg["role"] == "user")
             
-            # If there are still missing variables, request the next one
-            if missing_vars:
-                next_var = missing_vars[0]
-                # Update context with latest state
-                context.update({
-                    "current_age": state["data"].get("current_age", 0),
-                    "current_balance": state["data"].get("current_balance", 0),
-                    "current_income": state["data"].get("current_income", 0),
-                    "retirement_age": state["data"].get("retirement_age", 0),
-                    "current_fund": state["data"].get("current_fund"),
-                    "nominated_fund": state["data"].get("nominated_fund"),
-                    "intent": state["data"].get("intent"),
-                    "previous_var": state["data"].get("last_var")
-                })
-                unified_message = await get_unified_variable_response(next_var, None, context, missing_vars)
-                state["data"]["last_clarification_prompt"] = unified_message
-                state["missing_var"] = next_var
-                
-                # Add the current conversation exchange to history in Gradio format
-                history.append((user_message, unified_message))
+            # Call process_query to determine if there are more missing variables
+            # This will return either a response (if all variables are collected) or a prompt for the next variable
+            answer = await process_query(user_message, previous_system_response, full_history, state)
+            
+            # If state.missing_var exists, that means process_query identified more variables needed
+            if state.get("missing_var"):
+                # Just add the current message exchange to history
+                history.append((user_message, answer))
             else:
-                # All required variables collected, process the complete query
-                previous_system_response = next((msg["content"] for msg in reversed(internal_history) if msg["role"] == "assistant"), "")
-                full_history = " ".join(msg["content"] for msg in internal_history if msg["role"] == "user")
-                
-                print("DEBUG: Processing complete query after collecting all variables")
-                
-                answer = await process_query(user_message, previous_system_response, full_history, state)
-                
-                print(f"DEBUG: Got answer: {answer}")
-
+                # All required variables collected, we have a complete answer
                 if answer:
                     # Record messages in Supabase
                     await record_chat_message(session_id, "user", user_message)
@@ -715,23 +689,14 @@ async def chat_fn(user_message, history, state, user_info=None):
                             )
                     
                     print("DEBUG: Adding final answer to history")
-                    # Create a new list with the same content as history to avoid reference issues
-                    new_history = [(msg1, msg2) for msg1, msg2 in history]
-                    # Append the new exchange (ensure it's in tuple format)
-                    new_history.append((user_message, answer))
-                    # Replace history with new_history
-                    history = new_history
-                    print(f"DEBUG: Final history length: {len(history)}")
+                    history.append((user_message, answer))
                 else:
                     # Handle error case
                     error_message = "I apologize, but I couldn't process that request. Could you please try again?"
                     await record_chat_message(session_id, "user", user_message)
                     await record_chat_message(session_id, "assistant", error_message)
                     
-                    print("DEBUG: No answer received, adding error message")
-                    new_history = [(msg1, msg2) for msg1, msg2 in history]
-                    new_history.append((user_message, "I apologize, but I couldn't process that request. Could you please try again?"))
-                    history = new_history
+                    history.append((user_message, error_message))
         else:
             # Handle invalid extraction
             error_message = "I'm sorry, I didn't understand that. Could you please repeat?"
