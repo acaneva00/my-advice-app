@@ -390,22 +390,9 @@ async def extract_variable_from_response(last_prompt: str, user_message: str, co
     Returns a dictionary with 'variable' and 'value' keys.
     """
     
-    # Define which variables should be treated as numbers
-    numeric_vars = {
-        "current_age": "int",
-        "current_balance": "float",
-        "current_income": "float",
-        "retirement_age": "int",
-        "income_net_of_super": "flaot",
-        "after_tax_income": "float",	
-        "retirement_balance": "float",
-        "retirement_income": "float",
-        "retirement_drawdown_age": "int"
-    }
+    # Use the centralized mapping from utils.py instead of defining locally
+    from backend.utils import VARIABLE_TYPE_MAP, convert_variable_type
     
-    # Define which variables should be treated as booleans
-    boolean_vars = ["super_included", "homeowner_status"]
-
     expected_var = map_canonical_to_internal(missing_var)
 
     print("DEBUG extract_variable_from_response: Missing variable:")
@@ -455,7 +442,7 @@ async def extract_variable_from_response(last_prompt: str, user_message: str, co
             converted_value = convert_variable_type(expected_var, raw_value)
             
             # If conversion failed (returned None) but we had a value, try LLM interpretation for booleans
-            if converted_value is None and expected_var in boolean_vars:
+            if converted_value is None and VARIABLE_TYPE_MAP.get(expected_var) == "boolean":
                 try:
                     if expected_var == "homeowner_status":
                         interpret_prompt = f"Based on this response, does the user own their home or rent? Response: '{raw_value}'"

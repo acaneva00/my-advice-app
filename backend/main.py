@@ -24,6 +24,7 @@ from backend.utils import (
     get_asfa_standards,
     create_context_from_state,
     map_canonical_to_internal, 
+    calculate_age_pension,
     SYSTEM_VARIABLES
 )
 
@@ -1503,15 +1504,15 @@ async def process_query(user_query: str, previous_system_response: str = "", ful
             missing_vars.append("homeowner_status")
         if not state["data"].get("current_balance"):
             missing_vars.append("super balance")
-        if not state["data"].get("cash_assets"):
+        if state["data"].get("cash_assets") is None:
             missing_vars.append("cash_assets")
-        if not state["data"].get("share_investments"):
+        if state["data"].get("share_investments") is None:
             missing_vars.append("share_investments")
-        if not state["data"].get("investment_properties"):
+        if state["data"].get("investment_properties") is None:
             missing_vars.append("investment_properties")
-        if not state["data"].get("non_financial_assets"):
+        if state["data"].get("non_financial_assets") is None:
             missing_vars.append("non_financial_assets")
-        if not state["data"].get("current_income"):
+        if state["data"].get("current_income") is None:
             missing_vars.append("current income")
     
     # If any variables are missing, generate a structured prompt using the LLM
@@ -1539,35 +1540,7 @@ async def process_query(user_query: str, previous_system_response: str = "", ful
         # Save the missing variable key in state
         state["missing_var"] = canonical
     
-        context = {
-            "current_age": user_age if user_age > 0 else None,
-            "current_balance": user_balance if user_balance > 0 else None,
-            "current_income": current_income if current_income > 0 else None,
-            "retirement_age": retirement_age if retirement_age > 0 else None,
-            "current_fund": state["data"].get("current_fund"),  # Fixed this line
-            "nominated_fund": state["data"].get("nominated_fund"),
-            "super_included": state["data"].get("super_included"),
-            "retirement_income_option": state["data"].get("retirement_income_option"),
-            "retirement_income": state["data"].get("retirement_income"),
-            "income_net_of_super": state["data"].get("income_net_of_super"),
-            "after_tax_income": state["data"].get("after_tax_income"),
-            "retirement_balance": state["data"].get("retirement_balance"),
-            "retirement_drawdown_age": state["data"].get("retirement_drawdown_age"),
-            # Age pension related variables - THESE WERE MISSING
-            "relationship_status": state["data"].get("relationship_status"),
-            "homeowner_status": state["data"].get("homeowner_status"),
-            "cash_assets": state["data"].get("cash_assets"),
-            "share_investments": state["data"].get("share_investments"),
-            "investment_properties": state["data"].get("investment_properties"),
-            "non_financial_assets": state["data"].get("non_financial_assets"),
-            # Intent tracking
-            "intent": intent,
-            "previous_intent": state["data"].get("previous_intent"),
-            "original_intent": state["data"].get("original_intent"),
-            "is_new_intent": is_new_intent,
-            "previous_var": state.get("data", {}).get("last_var"),
-            "user_query": user_query
-        }
+        context = create_context_from_state(state, include_intent_info=True)
         
         print("DEBUG main.py: Context before unified response:")
         print(f"DEBUG main.py: Intent = {intent}")
