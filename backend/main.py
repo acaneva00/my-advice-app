@@ -21,7 +21,10 @@ from backend.utils import (
     match_fund_name,
     filter_dataframe_by_fund_name,
     calculate_retirement_drawdown, 
-    get_asfa_standards 
+    get_asfa_standards,
+    create_context_from_state,
+    map_canonical_to_internal, 
+    SYSTEM_VARIABLES
 )
 
 from backend.helper import (
@@ -1295,22 +1298,8 @@ async def process_query(user_query: str, previous_system_response: str = "", ful
         else:
         # If we're in the middle of collecting variables, only update the specific variable we asked for
             if state.get("missing_var"):
-                # Map the missing_var to the actual state key
-                var_map = {
-                    "age": "current_age",
-                    "super balance": "current_balance",
-                    "current income": "current_income",
-                    "desired retirement age": "retirement_age",
-                    "current fund": "current_fund",
-                    "nominated fund": "nominated_fund",
-                    "super_included": "super_included",
-                    "income_net_of_super": "income_net_of_super",
-                    "after_tax_income": "after_tax_income",
-                    "retirement_balance": "retirement_balance",
-                    "retirement_income": "retirement_income",
-                    "retirement_drawdown_age": "retirement_drawdown_age"
-                }           
-                var_key = var_map.get(state["missing_var"], state["missing_var"])
+                
+                var_key = map_canonical_to_internal(state["missing_var"])
                 print(f"DEBUG main.py: Looking for extracted value for {var_key} (mapped from {state['missing_var']})")
                 print(f"DEBUG main.py: Current state values: {state['data']}")
                 
@@ -1357,6 +1346,18 @@ async def process_query(user_query: str, previous_system_response: str = "", ful
                         state["data"]["nominated_fund"] = matched_fund
                     else:
                         state["data"]["nominated_fund"] = temp_fund
+
+                # Process all other variables generically
+                for key, value in extracted.items():
+                    # Skip keys that are already handled specially
+                    if key not in ["intent", "current_fund", "nominated_fund"] and value is not None:
+                        # For numeric values, preserve zeros
+                        if key in state["data"] and (not isinstance(value, (int, float)) or value != 0):
+                            state["data"][key] = value
+                        # For new values not yet in state
+                        elif key not in state["data"]:
+                            state["data"][key] = value
+
                 print(f"DEBUG main.py: Before updating super_included, current value: {state['data'].get('super_included')}")
                 if "super_included" in extracted and extracted["super_included"] is not None:
                     state["data"]["super_included"] = extracted["super_included"]
@@ -1382,33 +1383,9 @@ async def process_query(user_query: str, previous_system_response: str = "", ful
     print("DEBUG main.py: State after updating calculated values:", state)
     
     # Build context dict for variable requests
-    context = {
-        "current_age": state["data"].get("current_age", 0) or None,
-        "current_balance": state["data"].get("current_balance", 0) or None,
-        "current_income": state["data"].get("current_income", 0) or None,
-        "retirement_age": state["data"].get("retirement_age", 0) or None,
-        "current_fund": state["data"].get("current_fund"), 
-        "nominated_fund": state["data"].get("nominated_fund"), 
-        "super_included": state["data"].get("super_included"), 
-        "retirement_income_option": state["data"].get("retirement_income_option"), 
-        "retirement_income": state["data"].get("retirement_income"), 
-        "income_net_of_super": state["data"].get("income_net_of_super"), 
-        "after_tax_income": state["data"].get("after_tax_income"), 
-        "retirement_balance": state["data"].get("retirement_balance"),
-        "retirement_drawdown_age": state["data"].get("retirement_drawdown_age"),
-        "relationship_status": state["data"].get("relationship_status"),
-        "homeowner_status": state["data"].get("homeowner_status"),
-        "cash_assets": state["data"].get("cash_assets", 0) or None,
-        "share_investments": state["data"].get("share_investments", 0) or None,
-        "investment_properties": state["data"].get("investment_properties", 0) or None,
-        "non_financial_assets": state["data"].get("non_financial_assets", 0) or None,
-        "intent": intent,
-        "previous_intent": state["data"].get("previous_intent"),
-        "original_intent": state["data"].get("original_intent"),  
-        "is_new_intent": is_new_intent,
-        "previous_var": state["data"].get("last_var"),
-        "user_query": user_query 
-    }
+    context = create_context_from_state(state, include_intent_info=True)
+    context["is_new_intent"] = is_new_intent  # Override with the calculated value
+    context["user_query"] = user_query  # Override with the current query
     
     # For update_variable intent, store the entire previous state data for reference
     if intent == "update_variable":
@@ -1576,9 +1553,20 @@ async def process_query(user_query: str, previous_system_response: str = "", ful
             "after_tax_income": state["data"].get("after_tax_income"),
             "retirement_balance": state["data"].get("retirement_balance"),
             "retirement_drawdown_age": state["data"].get("retirement_drawdown_age"),
+            # Age pension related variables - THESE WERE MISSING
+            "relationship_status": state["data"].get("relationship_status"),
+            "homeowner_status": state["data"].get("homeowner_status"),
+            "cash_assets": state["data"].get("cash_assets"),
+            "share_investments": state["data"].get("share_investments"),
+            "investment_properties": state["data"].get("investment_properties"),
+            "non_financial_assets": state["data"].get("non_financial_assets"),
+            # Intent tracking
             "intent": intent,
+            "previous_intent": state["data"].get("previous_intent"),
+            "original_intent": state["data"].get("original_intent"),
             "is_new_intent": is_new_intent,
-            "previous_var": state.get("data", {}).get("last_var")
+            "previous_var": state.get("data", {}).get("last_var"),
+            "user_query": user_query
         }
         
         print("DEBUG main.py: Context before unified response:")

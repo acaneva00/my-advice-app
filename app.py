@@ -1,7 +1,7 @@
 import gradio as gr
 from backend.main import process_query, parse_numeric_with_suffix, validate_response, get_clarification_prompt, df
 from backend.helper import ask_llm, get_unified_variable_response, update_calculated_values, extract_intent_variables
-from backend.utils import match_fund_name, convert_variable_type, VARIABLE_TYPE_MAP
+from backend.utils import match_fund_name, convert_variable_type, VARIABLE_TYPE_MAP, create_context_from_state, map_canonical_to_internal
 from backend.cashflow import calculate_income_net_of_super, calculate_after_tax_income
 from backend.supabase.chatService import ChatService
 from flask import Flask, request, jsonify
@@ -389,21 +389,6 @@ async def extract_variable_from_response(last_prompt: str, user_message: str, co
     Extract a specific variable from the user's response based on what was asked.
     Returns a dictionary with 'variable' and 'value' keys.
     """
-    # Map canonical variables to expected LLM output
-    var_map = {
-        "age": "current_age",
-        "super balance": "current_balance",
-        "current income": "current_income",
-        "desired retirement age": "retirement_age",
-        "current fund": "current_fund",
-        "nominated fund": "nominated_fund",
-        "super_included": "super_included",
-        "income_net_of_super": "income_net_of_super",
-        "after_tax_income": "after_tax_income",
-        "retirement_balance": "retirement_balance",
-        "retirement_income": "retirement_income",
-        "retirement_drawdown_age": "retirement_drawdown_age"
-    }
     
     # Define which variables should be treated as numbers
     numeric_vars = {
@@ -421,7 +406,7 @@ async def extract_variable_from_response(last_prompt: str, user_message: str, co
     # Define which variables should be treated as booleans
     boolean_vars = ["super_included", "homeowner_status"]
 
-    expected_var = var_map.get(missing_var, missing_var)
+    expected_var = map_canonical_to_internal(missing_var)
 
     print("DEBUG extract_variable_from_response: Missing variable:")
     print(missing_var)
@@ -593,39 +578,18 @@ async def chat_fn(user_message, history, state, user_info=None):
     
     # If we are waiting for a specific missing variable
     if state.get("missing_var"):
+        # Flag to indicate we're in variable collection mode
+        state["data"]["in_variable_collection"] = True
         var_marker = state.pop("missing_var")
         print(f"DEBUG app.py: Processing missing var: {var_marker}")
 
-        var_map = {
-            "age": "current_age",
-            "super balance": "current_balance",
-            "current income": "current_income",
-            "desired retirement age": "retirement_age",
-            "current fund": "current_fund",
-            "nominated fund": "nominated_fund",
-            "retirement_income": "retirement_income",
-            "relationship_status": "relationship_status",
-            "homeowner_status": "homeowner_status",
-            "cash_assets": "cash_assets",
-            "share_investments": "share_investments",
-            "investment_properties": "investment_properties",
-            "non_financial_assets": "non_financial_assets"
-        }
-    
-        expected_var = var_map.get(var_marker, var_marker)
+        expected_var = map_canonical_to_internal(var_marker)
+
         print(f"DEBUG app.py: Mapped {var_marker} to {expected_var}")
         
         # Create context for extraction
-        context = {
-            "current_age": state["data"].get("current_age", 0),
-            "current_balance": state["data"].get("current_balance", 0),
-            "current_income": state["data"].get("current_income", 0),
-            "retirement_age": state["data"].get("retirement_age", 0),
-            "current_fund": state["data"].get("current_fund"),
-            "intent": state["data"].get("intent"),
-            "is_new_intent": False,  # Not a new intent when processing a variable
-            "previous_var": state["data"].get("last_var")  # Include previous variable
-        }
+        context = create_context_from_state(state, include_intent_info=True)
+        context["is_new_intent"] = False  # Override for this specific use case
         
         last_prompt = state["data"].get("last_clarification_prompt", "")
         

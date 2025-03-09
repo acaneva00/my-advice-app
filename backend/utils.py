@@ -82,30 +82,50 @@ def convert_variable_type(variable_name, value):
     elif var_type == "integer":
         try:
             if isinstance(value, str):
+                value_lower = value.lower().strip()
+                # Handle zero text representations
+                if value_lower in ["zero", "none", "no", "0", "nil", "nothing", "not any", "don't have any"]:
+                    return 0
                 # Remove any non-numeric characters except decimals
                 clean_value = ''.join(c for c in value if c.isdigit() or c == '.')
                 return int(float(clean_value))
             elif isinstance(value, (int, float)):
                 return int(value)
         except (ValueError, TypeError):
+            print(f"DEBUG: Could not convert to integer: {value} for {variable_name}")
             return None
     
     elif var_type == "currency":
         try:
             if isinstance(value, str):
+                value_lower = value.lower().strip()
+                # Handle zero text representations
+                if value_lower in ["zero", "none", "no", "0", "nil", "nothing", "not any", "don't have any", 
+                                   "i don't have any investments", "no investments", "no shares"]:
+                    return 0.0
+                    
                 # Remove currency symbols and commas
-                clean_value = value.replace('$', '').replace(',', '').strip().lower()
+                clean_value = value_lower.replace('$', '').replace(',', '').strip()
                 
                 # Handle suffixes
-                if clean_value.endswith('k'):
-                    return float(clean_value[:-1]) * 1000
-                elif clean_value.endswith('m'):
-                    return float(clean_value[:-1]) * 1000000
+                if 'k' in clean_value:
+                    multiplier = 1000
+                    clean_value = clean_value.replace('k', '')
+                elif 'm' in clean_value:
+                    multiplier = 1000000
+                    clean_value = clean_value.replace('m', '')
                 else:
-                    return float(clean_value)
+                    multiplier = 1
+                
+                # Final clean to ensure only digits and decimal points
+                clean_value = ''.join(c for c in clean_value if c.isdigit() or c == '.')
+                if clean_value:
+                    return float(clean_value) * multiplier
+                return None
             elif isinstance(value, (int, float)):
                 return float(value)
         except (ValueError, TypeError):
+            print(f"DEBUG: Could not convert to currency: {value} for {variable_name}")
             return None
     
     elif var_type == "enum":
@@ -616,3 +636,90 @@ def calculate_age_pension(
         "deemed_income_annual": deemed_income,
         "max_pension_annual": max_pension
     }
+
+SYSTEM_VARIABLES = [
+    "current_age",
+    "current_balance",
+    "current_income",
+    "retirement_age",
+    "current_fund",
+    "nominated_fund",
+    "super_included",
+    "retirement_income_option",
+    "retirement_income",
+    "income_net_of_super",
+    "after_tax_income",
+    "retirement_balance",
+    "retirement_drawdown_age",
+    "relationship_status",
+    "homeowner_status",
+    "cash_assets",
+    "share_investments", 
+    "investment_properties",
+    "non_financial_assets",
+]
+
+def create_context_from_state(state, include_intent_info=True):
+    """
+    Create a context dictionary from state with consistent handling of all variables.
+    
+    Args:
+        state: The current state dictionary
+        include_intent_info: Whether to include intent-related fields
+        
+    Returns:
+        A dictionary with all system variables from state
+    """
+    context = {}
+    
+    # Add all system variables from state
+    for var in SYSTEM_VARIABLES:
+        context[var] = state["data"].get(var)
+    
+    # Add intent information if requested
+    if include_intent_info:
+        context["intent"] = state["data"].get("intent", "unknown")
+        context["previous_intent"] = state["data"].get("previous_intent")
+        context["original_intent"] = state["data"].get("original_intent")
+        context["is_new_intent"] = False  # Default value, should be overridden when needed
+        context["previous_var"] = state["data"].get("last_var")
+        context["user_query"] = state.get("user_query", "")
+    
+    return context
+
+# Master mapping of all variables and their canonical forms
+VARIABLE_MAPPINGS = {
+    # Canonical form -> internal state key
+    "age": "current_age",
+    "super balance": "current_balance",
+    "current income": "current_income", 
+    "desired retirement age": "retirement_age",
+    "current fund": "current_fund",
+    "nominated fund": "nominated_fund",
+    "super_included": "super_included",  # Some variables have the same canonical and internal name
+    "income_net_of_super": "income_net_of_super",
+    "after_tax_income": "after_tax_income",
+    "retirement_balance": "retirement_balance",
+    "retirement_income": "retirement_income",
+    "retirement_drawdown_age": "retirement_drawdown_age",
+    "relationship_status": "relationship_status",
+    "homeowner_status": "homeowner_status",
+    "cash_assets": "cash_assets",
+    "share_investments": "share_investments",
+    "investment_properties": "investment_properties",
+    "non_financial_assets": "non_financial_assets"
+}
+
+# List of all system variables (internal state keys)
+SYSTEM_VARIABLES = list(set(VARIABLE_MAPPINGS.values()))
+
+# Function to map from canonical to internal name 
+def map_canonical_to_internal(canonical_name):
+    """Maps a canonical variable name to its internal state key."""
+    return VARIABLE_MAPPINGS.get(canonical_name, canonical_name)
+
+# Function to map from internal to canonical (reverse mapping)
+def map_internal_to_canonical(internal_name):
+    """Maps an internal state key to its canonical name for display."""
+    reverse_map = {v: k for k, v in VARIABLE_MAPPINGS.items()}
+    return reverse_map.get(internal_name, internal_name)

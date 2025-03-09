@@ -260,6 +260,14 @@ async def extract_intent_variables(user_query: str, previous_system_response: st
             "- Convert k/K to thousands (e.g., 150k = 150000)\n"
             "- Convert m/M to millions (e.g., 1.5m = 1500000)\n"
             "- Remove dollar signs and commas\n\n"
+            "Context Awareness Instructions:\n"
+            "- BEFORE classifying intent, carefully examine the conversation flow:\n"
+            "  1. Look at the previous system response: Was it asking a specific question?\n"
+            "  2. Look at the user's current response: Is it a direct answer to that question?\n"
+            "  3. If the user is clearly responding to a specific question about their status or information, maintain the current intent flow\n"
+            "- For example, if the system asks 'Do you own your home or rent?' and the user responds 'I own my home', this is NOT an update_variable intent - it's simply answering the question within the current intent\n"
+            "- Similarly, if the system asks about relationship status, age, or account balances, and the user provides that specific information, it's continuing the same conversation flow\n"
+            "- Only classify as update_variable when the user is explicitly trying to change a previously established value, not when they're providing information for the first time\n"
             "Important instructions for resolving references:\n"
             "- If the user query contains references like 'this fund', 'that fund', or similar, look for fund names in the previous system response\n"
             "- If user mentions their fund (e.g., 'my fund', 'my super', 'my account', 'I am with') as one fund and references another fund from the previous response, properly assign current_fund and nominated_fund\n"
@@ -295,6 +303,18 @@ async def extract_intent_variables(user_query: str, previous_system_response: st
             "- 'Will my super last until I'm 90?' → intent: retirement_outcome\n"
             "- 'What if I worked until I was 67' → intent: update_variable\n"
             "- 'Let's say I took $70k as income instead' → intent: update_variable, retirement_income: 70000, retirement_income_option: \"custom\"\n"
+            "Context Response Examples:\n"
+            "- System: 'Could you tell me your current age?' User: '68' → NOT update_variable (maintain current intent)\n"
+            "- System: 'Are you single or in a relationship?' User: 'Single' → NOT update_variable (maintain current intent)\n"
+            "- System: 'Do you own your home or rent?' User: 'I own my home' → NOT update_variable (maintain current intent)\n"
+            "- System: 'Based on your super of $100,000, you'll have $500,000 at retirement' User: 'What if my super was $200,000?' → IS update_variable\n"
+            "- System: 'Your retirement age is 67' User: 'Actually, I want to retire at 65' → IS update_variable\n"
+            "Special Variable Collection Instructions:\n"
+            "- For homeowner status questions, when the user responds with phrases like 'I own my home', 'own home', 'homeowner', etc., this is NEVER a new intent - it's answering the specific question about homeownership\n"
+            "- The homeowner status is particularly important for calculating government benefits like Age Pension\n"
+            "- When asking about homeowner status, the conversation is continuing the SAME intent flow (e.g., 'calculate_age_pension')\n"
+            "- Similarly, when the system asks about relationship status and the user says 'single' or 'couple', this is continuing the same intent, not starting a new one\n"
+            "- CRITICAL: If the previous system message asked 'do you own your home' or similar homeownership question, and the user responds with 'I own my home' or similar, NEVER classify this as 'retirement_outcome' or 'update_variable' - it should be 'unknown' to maintain the current intent\n"
             "Return a valid JSON object."
         )
         
@@ -337,6 +357,30 @@ async def extract_intent_variables(user_query: str, previous_system_response: st
                 "income_net_of_super": 0
             }
             default_data.update(data)
+            
+            # Add the check for direct responses to questions
+            if default_data.get("intent") == "update_variable" and previous_system_response:
+                # Check if this looks like a response to a variable collection prompt
+                prompt_lower = previous_system_response.lower()
+                is_collection_prompt = any(phrase in prompt_lower for phrase in 
+                                        ["could you tell me", "please provide", "what is your", 
+                                        "let me know", "are you single", "do you own", "relationship status"])
+                
+                if is_collection_prompt:
+                    direct_response = False
+                    
+                    # Call the async function if it's a complex response that needs LLM analysis
+                    if len(user_query.split()) > 3:  # For longer responses, use LLM
+                        direct_response = await is_direct_response_to_question(user_query, previous_system_response)
+                    else:  # For shorter responses, use heuristics
+                        # Check for simple yes/no or direct answers
+                        simple_answers = ["yes", "no", "own", "rent", "single", "couple", "married"]
+                        direct_response = any(answer.lower() in user_query.lower() for answer in simple_answers)
+                    
+                    if direct_response or is_collection_prompt:
+                        print("DEBUG intent_extractor.py: Detected direct response to collection question. Not treating as update_variable.")
+                        default_data["intent"] = "unknown"  # Don't change the current intent flow
+            
             print(f"DEBUG helper.py: Final extracted data before returning: {default_data}")
             return default_data
         except Exception as e:
@@ -353,6 +397,28 @@ async def extract_intent_variables(user_query: str, previous_system_response: st
     except Exception as e:
         print(f"DEBUG intent_extractor.py: Unexpected error: {e}")
         raise
+
+async def is_direct_response_to_question(user_query: str, previous_response: str) -> bool:
+    """Determines if the user query is directly answering a question in the previous response."""
+    if not previous_response:
+        return False
+        
+    system_prompt = (
+        "You are analyzing conversation flow. Given a previous system message and user response, "
+        "determine if the user is directly answering a question that was asked in the previous message. "
+        "Answer with ONLY 'yes' or 'no'."
+    )
+    
+    user_prompt = (
+        f"Previous system message: \"{previous_response}\"\n"
+        f"User response: \"{user_query}\"\n\n"
+        f"Is the user directly answering a specific question posed in the previous message? "
+        f"Consider if the previous message was asking for specific information like age, "
+        f"relationship status, homeowner status, account balances, etc."
+    )
+    
+    result = await ask_llm(system_prompt, user_prompt)
+    return result.lower().strip() == 'yes'
 
 # Define the connections between intents as a global constant
 INTENT_CONNECTIONS = {
